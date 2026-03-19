@@ -158,6 +158,53 @@ func BenchmarkExecute(b *testing.B) {
 	}
 }
 
+func BenchmarkExecuteUDF(b *testing.B) {
+	filter, _ := Compile(`get_score(name) > 5.0 and is_active()`, nil)
+	ctx := NewExecutionContext().
+		SetStringField("name", "test").
+		SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
+			return FloatValue(7.5), nil
+		}).
+		SetFunc("is_active", func(_ context.Context, _ []Value) (Value, error) {
+			return BoolValue(true), nil
+		})
+
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = filter.Execute(ctx)
+	}
+}
+
+func BenchmarkExecuteUDFCached(b *testing.B) {
+	filter, _ := Compile(`get_score(name) > 5.0 and get_score(name) < 100.0`, nil)
+	ctx := NewExecutionContext().
+		EnableCache().
+		SetStringField("name", "test").
+		SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
+			return FloatValue(7.5), nil
+		})
+
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = filter.Execute(ctx)
+	}
+}
+
+func BenchmarkSchemaValidation(b *testing.B) {
+	schema := NewSchema().
+		AddField("http.host", TypeString).
+		AddField("http.status", TypeInt).
+		AddField("ip.src", TypeIP).
+		AddField("tags", TypeArray)
+
+	expr := `http.host == "example.com" and http.status >= 400 and ip.src in "10.0.0.0/8"`
+
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = Compile(expr, schema)
+	}
+}
+
 func FuzzCompile(f *testing.F) {
 	f.Add(`http.host == "example.com"`)
 	f.Add(`http.status >= 400`)
@@ -227,8 +274,35 @@ func FuzzCompile(f *testing.F) {
 	f.Add(`x / 3 == 1`)
 	f.Add(`x % 2 == 0`)
 
-	f.Fuzz(func(_ *testing.T, input string) {
-		_, _ = Compile(input, nil)
+	f.Fuzz(func(t *testing.T, input string) {
+		f1, err1 := Compile(input, nil)
+		f2, err2 := Compile(input, nil)
+
+		// Determinism: same input must produce same result
+		if (err1 == nil) != (err2 == nil) {
+			t.Fatalf("non-deterministic compile for %q", input)
+		}
+		if err1 != nil {
+			return
+		}
+
+		// Hash stability
+		if f1.Hash() != f2.Hash() {
+			t.Fatalf("hash mismatch for %q: %s vs %s", input, f1.Hash(), f2.Hash())
+		}
+
+		// Execution determinism
+		ctx := NewExecutionContext().
+			SetStringField("name", "test").
+			SetIntField("x", 5).
+			SetBoolField("active", true).
+			SetIPField("ip", "10.0.0.1").
+			SetArrayField("tags", []string{"a", "b"})
+		r1, e1 := f1.Execute(ctx)
+		r2, e2 := f2.Execute(ctx)
+		if (e1 == nil) != (e2 == nil) || r1 != r2 {
+			t.Fatalf("non-deterministic execute for %q", input)
+		}
 	})
 }
 
@@ -245,7 +319,7 @@ func FuzzExecute(f *testing.F) {
 		AddField("http.host", TypeString).
 		AddField("http.status", TypeInt)
 
-	f.Fuzz(func(_ *testing.T, expression string, host string, status int64) {
+	f.Fuzz(func(t *testing.T, expression string, host string, status int64) {
 		filter, err := Compile(expression, schema)
 		if err != nil {
 			return
@@ -255,7 +329,12 @@ func FuzzExecute(f *testing.F) {
 			SetStringField("http.host", host).
 			SetIntField("http.status", status)
 
-		_, _ = filter.Execute(ctx)
+		// Determinism: execute twice, same result
+		r1, e1 := filter.Execute(ctx)
+		r2, e2 := filter.Execute(ctx)
+		if (e1 == nil) != (e2 == nil) || r1 != r2 {
+			t.Fatalf("non-deterministic execute for %q", expression)
+		}
 	})
 }
 
@@ -339,6 +418,33 @@ func FuzzFunctions(f *testing.F) {
 	f.Add(`url_decode(name)`, "hello%20world")
 	f.Add(`cidr(ip, 24)`, "192.168.1.100")
 	f.Add(`cidr6(ip, 64)`, "2001:db8::1")
+	f.Add(`trim(name)`, "  hello  ")
+	f.Add(`trim_left(name)`, "  hello")
+	f.Add(`trim_right(name)`, "hello  ")
+	f.Add(`replace(name, "a", "b")`, "aaa")
+	f.Add(`regex_replace(name, "[0-9]+", "X")`, "abc123")
+	f.Add(`regex_extract(name, "[0-9]+")`, "abc123")
+	f.Add(`contains_word(name, "hello")`, "hello world")
+	f.Add(`abs(n)`, "test")
+	f.Add(`ceil(score)`, "test")
+	f.Add(`floor(score)`, "test")
+	f.Add(`round(score)`, "test")
+	f.Add(`is_ipv4(ip)`, "192.168.1.1")
+	f.Add(`is_ipv6(ip)`, "2001:db8::1")
+	f.Add(`is_loopback(ip)`, "127.0.0.1")
+	f.Add(`count(tags)`, "test")
+	f.Add(`coalesce(name, "default")`, "test")
+	f.Add(`exists(name)`, "test")
+	f.Add(`any(tags[*] == "a")`, "test")
+	f.Add(`all(tags[*] == "a")`, "test")
+	f.Add(`has_key(data, "key")`, "test")
+	f.Add(`has_value(tags, "a")`, "test")
+	f.Add(`join(tags, ",")`, "test")
+	f.Add(`contains_any(tags, other)`, "test")
+	f.Add(`contains_all(tags, other)`, "test")
+	f.Add(`len(intersection(tags, other))`, "test")
+	f.Add(`len(union(tags, other))`, "test")
+	f.Add(`len(difference(tags, other))`, "test")
 
 	f.Fuzz(func(_ *testing.T, expression, value string) {
 		filter, err := Compile(expression, nil)
@@ -349,7 +455,11 @@ func FuzzFunctions(f *testing.F) {
 		ctx := NewExecutionContext().
 			SetStringField("name", value).
 			SetIPField("ip", value).
-			SetIntField("n", int64(len(value)))
+			SetIntField("n", int64(len(value))).
+			SetFloatField("score", 3.14).
+			SetArrayField("tags", []string{"a", "b"}).
+			SetArrayField("other", []string{"b", "c"}).
+			SetMapField("data", map[string]string{"key": "val"})
 
 		_, _ = filter.Execute(ctx)
 	})
@@ -375,6 +485,84 @@ func FuzzSchemaValidation(f *testing.F) {
 
 	f.Fuzz(func(_ *testing.T, expression string) {
 		_, _ = Compile(expression, schema)
+	})
+}
+
+func FuzzExecuteWithTrace(f *testing.F) {
+	f.Add(`name == "test" and status > 200`)
+	f.Add(`lower(name) == "hello" or status in {200..299}`)
+	f.Add(`not active`)
+	f.Add(`tags[*] contains "a"`)
+	f.Add(`ip in "10.0.0.0/8"`)
+
+	f.Fuzz(func(t *testing.T, expression string) {
+		filter, err := Compile(expression, nil)
+		if err != nil {
+			return
+		}
+
+		ctx := NewExecutionContext().
+			EnableTrace().
+			SetStringField("name", "test").
+			SetIntField("status", 200).
+			SetBoolField("active", true).
+			SetIPField("ip", "10.0.0.1").
+			SetArrayField("tags", []string{"a", "b"})
+
+		r1, e1 := filter.Execute(ctx)
+		trace := ctx.Trace()
+		if e1 == nil && trace == nil {
+			t.Fatal("trace should not be nil after execution")
+		}
+
+		// Result with tracing must match result without tracing
+		ctx2 := NewExecutionContext().
+			SetStringField("name", "test").
+			SetIntField("status", 200).
+			SetBoolField("active", true).
+			SetIPField("ip", "10.0.0.1").
+			SetArrayField("tags", []string{"a", "b"})
+
+		r2, e2 := filter.Execute(ctx2)
+		if (e1 == nil) != (e2 == nil) || r1 != r2 {
+			t.Fatalf("trace should not affect result for %q", expression)
+		}
+	})
+}
+
+func FuzzExecuteWithCache(f *testing.F) {
+	f.Add(`get_score(name) > 5.0`)
+	f.Add(`get_score(name) > 5.0 and get_score(name) < 100.0`)
+	f.Add(`lower(name) == "test"`)
+
+	f.Fuzz(func(t *testing.T, expression string) {
+		filter, err := Compile(expression, nil)
+		if err != nil {
+			return
+		}
+
+		ctx := NewExecutionContext().
+			EnableCache().
+			SetStringField("name", "test").
+			SetIntField("status", 200).
+			SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
+				return FloatValue(7.5), nil
+			})
+
+		r1, e1 := filter.Execute(ctx)
+
+		// Result with cache must match result without cache
+		ctx2 := NewExecutionContext().
+			SetStringField("name", "test").
+			SetIntField("status", 200).
+			SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
+				return FloatValue(7.5), nil
+			})
+
+		r2, e2 := filter.Execute(ctx2)
+		if (e1 == nil) != (e2 == nil) || r1 != r2 {
+			t.Fatalf("cache should not affect result for %q", expression)
+		}
 	})
 }
 
@@ -900,4 +1088,25 @@ func TestExecuteNilContext(t *testing.T) {
 	result, err := filter.Execute(nil)
 	assert.NoError(t, err)
 	assert.False(t, result)
+}
+
+func TestEvaluateInnerEdgeCases(t *testing.T) {
+	t.Run("standalone range expr", func(t *testing.T) {
+		f := &Filter{expr: &RangeExpr{
+			Start: &LiteralExpr{Value: IntValue(1)},
+			End:   &LiteralExpr{Value: IntValue(5)},
+		}}
+		ctx := NewExecutionContext()
+		result, err := f.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result) // ArrayValue is truthy
+	})
+
+	t.Run("unknown expression type", func(t *testing.T) {
+		f := &Filter{expr: nil}
+		ctx := NewExecutionContext()
+		result, err := f.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result) // nil result
+	})
 }

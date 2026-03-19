@@ -81,10 +81,23 @@ func FuzzParser(f *testing.F) {
 	f.Add(`ip in get_cidrs(domain)`)
 	f.Add(`is_tor(ip) and maintenance()`)
 
-	f.Fuzz(func(_ *testing.T, input string) {
+	f.Fuzz(func(t *testing.T, input string) {
 		lexer := NewLexer(input)
 		parser := NewParser(lexer)
-		_, _ = parser.Parse()
+		expr, errs := parser.Parse()
+		if errs != nil || expr == nil {
+			return
+		}
+
+		// Compile and verify hash stability (parse determinism)
+		f1, err1 := Compile(input, nil)
+		f2, err2 := Compile(input, nil)
+		if err1 != nil || err2 != nil {
+			return
+		}
+		if f1.Hash() != f2.Hash() {
+			t.Fatalf("non-deterministic parse for %q", input)
+		}
 	})
 }
 

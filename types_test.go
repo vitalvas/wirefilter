@@ -116,18 +116,43 @@ func FuzzValueEquality(f *testing.F) {
 	f.Add("", "", int64(0), int64(0))
 	f.Add("test", "test", int64(-1), int64(1))
 
-	f.Fuzz(func(_ *testing.T, s1, s2 string, i1, i2 int64) {
+	f.Fuzz(func(t *testing.T, s1, s2 string, i1, i2 int64) {
 		sv1 := StringValue(s1)
 		sv2 := StringValue(s2)
-		sv1.Equal(sv2)
-
 		iv1 := IntValue(i1)
 		iv2 := IntValue(i2)
-		iv1.Equal(iv2)
-
 		bv1 := BoolValue(i1 > 0)
 		bv2 := BoolValue(i2 > 0)
-		bv1.Equal(bv2)
+
+		// Reflexivity: every value must equal a copy of itself
+		if !sv1.Equal(StringValue(s1)) {
+			t.Fatal("string reflexivity failed")
+		}
+		if !iv1.Equal(IntValue(i1)) {
+			t.Fatal("int reflexivity failed")
+		}
+		if !bv1.Equal(BoolValue(i1 > 0)) {
+			t.Fatal("bool reflexivity failed")
+		}
+
+		// Symmetry: a.Equal(b) == b.Equal(a)
+		if sv1.Equal(sv2) != sv2.Equal(sv1) {
+			t.Fatal("string symmetry failed")
+		}
+		if iv1.Equal(iv2) != iv2.Equal(iv1) {
+			t.Fatal("int symmetry failed")
+		}
+		if bv1.Equal(bv2) != bv2.Equal(bv1) {
+			t.Fatal("bool symmetry failed")
+		}
+
+		// Cross-type equality must be false
+		if sv1.Equal(iv1) {
+			t.Fatal("string should not equal int")
+		}
+		if iv1.Equal(bv1) {
+			t.Fatal("int should not equal bool")
+		}
 
 		_ = sv1.String()
 		_ = iv1.String()
@@ -141,6 +166,12 @@ func FuzzValueEquality(f *testing.F) {
 		_ = arr.Contains(sv2)
 		_ = arr.Contains(iv2)
 
+		// Array reflexivity
+		arrCopy := ArrayValue{StringValue(s1), IntValue(i1), BoolValue(i1 > 0)}
+		if !arr.Equal(arrCopy) {
+			t.Fatal("array reflexivity failed")
+		}
+
 		m := MapValue{"key": sv1}
 		_ = m.String()
 		_, _ = m.Get("key")
@@ -148,7 +179,9 @@ func FuzzValueEquality(f *testing.F) {
 
 		by1 := BytesValue([]byte(s1))
 		by2 := BytesValue([]byte(s2))
-		by1.Equal(by2)
+		if by1.Equal(by2) != by2.Equal(by1) {
+			t.Fatal("bytes symmetry failed")
+		}
 	})
 }
 

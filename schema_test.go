@@ -574,23 +574,51 @@ func TestSchemaExport(t *testing.T) {
 }
 
 func TestSchemaValidationEdgeCases(t *testing.T) {
-	t.Run("range start unknown field", func(t *testing.T) {
+	t.Run("range start validation error", func(t *testing.T) {
 		schema := NewSchema().AddField("x", TypeInt)
-		_, err := Compile(`x in {unknown..10}`, schema)
+		// Hand-build AST with unknown field inside RangeExpr.Start
+		expr := &BinaryExpr{
+			Left:     &FieldExpr{Name: "x"},
+			Operator: TokenIn,
+			Right: &ArrayExpr{Elements: []Expression{
+				&RangeExpr{
+					Start: &FieldExpr{Name: "unknown"},
+					End:   &LiteralExpr{Value: IntValue(10)},
+				},
+			}},
+		}
+		err := schema.Validate(expr)
 		assert.Error(t, err)
 	})
 
-	t.Run("validate func args no custom funcs registered", func(t *testing.T) {
-		schema := NewSchema().AddField("name", TypeString)
-		// Schema has no customFuncs, so validateFuncArgs returns nil
+	t.Run("range end validation error", func(t *testing.T) {
+		schema := NewSchema().AddField("x", TypeInt)
+		expr := &BinaryExpr{
+			Left:     &FieldExpr{Name: "x"},
+			Operator: TokenIn,
+			Right: &ArrayExpr{Elements: []Expression{
+				&RangeExpr{
+					Start: &LiteralExpr{Value: IntValue(1)},
+					End:   &FieldExpr{Name: "unknown"},
+				},
+			}},
+		}
+		err := schema.Validate(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("validate func args builtin with custom funcs registered", func(t *testing.T) {
+		schema := NewSchema().
+			AddField("name", TypeString).
+			RegisterFunction("custom_fn", TypeBool, nil)
+		// lower() is a built-in, not in customFuncs - hits the !ok return
 		_, err := Compile(`lower(name) == "test"`, schema)
 		assert.NoError(t, err)
 	})
 
-	t.Run("validate operator type with unknown field type", func(t *testing.T) {
-		// CIDR type is not in operatorsByType for most operators, so skip validation
-		schema := NewSchema().AddField("net", TypeCIDR)
-		_, err := Compile(`net == net`, schema)
+	t.Run("validate func args no custom funcs registered", func(t *testing.T) {
+		schema := NewSchema().AddField("name", TypeString)
+		_, err := Compile(`lower(name) == "test"`, schema)
 		assert.NoError(t, err)
 	})
 }

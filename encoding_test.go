@@ -833,7 +833,7 @@ func FuzzMarshalUnmarshal(f *testing.F) {
 			t.Fatalf("UnmarshalBinary failed for %q: %v", expr, err)
 		}
 
-		// Re-marshal should produce identical bytes
+		// Re-marshal should produce identical bytes (idempotency)
 		data2, err := restored.MarshalBinary()
 		if err != nil {
 			t.Fatalf("second MarshalBinary failed for %q: %v", expr, err)
@@ -841,6 +841,41 @@ func FuzzMarshalUnmarshal(f *testing.F) {
 
 		if len(data) != len(data2) {
 			t.Fatalf("roundtrip mismatch for %q: %d vs %d bytes", expr, len(data), len(data2))
+		}
+
+		// Execution results must match after roundtrip
+		ctx := NewExecutionContext().
+			SetStringField("name", "test").
+			SetIntField("status", 200).
+			SetBoolField("active", true).
+			SetIPField("ip", "10.0.0.1").
+			SetArrayField("tags", []string{"a", "b"}).
+			SetMapField("data", map[string]string{"key": "val"}).
+			SetList("names", []string{"test"}).
+			SetIPList("blocked", []string{"10.0.0.0/8"}).
+			SetTable("geo", map[string]string{"10.0.0.1": "US"}).
+			SetFunc("maintenance", func(_ context.Context, _ []Value) (Value, error) {
+				return BoolValue(true), nil
+			}).
+			SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
+				return FloatValue(7.5), nil
+			}).
+			SetFunc("is_tor", func(_ context.Context, _ []Value) (Value, error) {
+				return BoolValue(false), nil
+			})
+
+		r1, err1 := filter.Execute(ctx)
+		r2, err2 := restored.Execute(ctx)
+		if (err1 == nil) != (err2 == nil) {
+			t.Fatalf("execution error mismatch for %q: %v vs %v", expr, err1, err2)
+		}
+		if r1 != r2 {
+			t.Fatalf("execution result mismatch for %q: %v vs %v", expr, r1, r2)
+		}
+
+		// Hash must be stable after roundtrip
+		if filter.Hash() != restored.Hash() {
+			t.Fatalf("hash mismatch for %q", expr)
 		}
 	})
 }
