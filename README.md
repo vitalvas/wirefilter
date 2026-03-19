@@ -1236,7 +1236,3 @@ if err != nil {
     return
 }
 ```
-
-## License
-
-This package is part of the gokit library.
