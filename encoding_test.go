@@ -222,6 +222,536 @@ func TestMarshalUnmarshalRoundtrip(t *testing.T) {
 	assert.Equal(t, data1, data2)
 }
 
+func TestMarshalBinaryBytesValue(t *testing.T) {
+	filter, err := Compile(`data == "hello"`, nil)
+	require.NoError(t, err)
+
+	// Replace the literal with a BytesValue to exercise that encoding path
+	bin := filter.expr.(*BinaryExpr)
+	bin.Right = &LiteralExpr{Value: BytesValue([]byte("hello"))}
+
+	data, err := filter.MarshalBinary()
+	require.NoError(t, err)
+
+	restored := &Filter{}
+	require.NoError(t, restored.UnmarshalBinary(data))
+
+	ctx := NewExecutionContext().SetBytesField("data", []byte("hello"))
+	r1, _ := filter.Execute(ctx)
+	r2, _ := restored.Execute(ctx)
+	assert.Equal(t, r1, r2)
+}
+
+func TestMarshalBinaryIPv6Value(t *testing.T) {
+	filter, err := Compile(`ip == 2001:db8::1`, nil)
+	require.NoError(t, err)
+
+	data, err := filter.MarshalBinary()
+	require.NoError(t, err)
+
+	restored := &Filter{}
+	require.NoError(t, restored.UnmarshalBinary(data))
+
+	ctx := NewExecutionContext().SetIPField("ip", "2001:db8::1")
+	r1, _ := filter.Execute(ctx)
+	r2, _ := restored.Execute(ctx)
+	assert.Equal(t, r1, r2)
+}
+
+func TestMarshalBinaryNilLiteral(t *testing.T) {
+	filter, err := Compile(`name == "x"`, nil)
+	require.NoError(t, err)
+
+	// Replace right side with nil literal
+	bin := filter.expr.(*BinaryExpr)
+	bin.Right = &LiteralExpr{Value: nil}
+
+	data, err := filter.MarshalBinary()
+	require.NoError(t, err)
+
+	restored := &Filter{}
+	require.NoError(t, restored.UnmarshalBinary(data))
+}
+
+func TestWriteExprUnknownType(t *testing.T) {
+	w := &encWriter{buf: make([]byte, 0, 64)}
+	err := w.writeExpr(nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown expression type")
+}
+
+func TestWriteValueUnknownType(t *testing.T) {
+	w := &encWriter{buf: make([]byte, 0, 64)}
+	err := w.writeValue(ArrayValue{StringValue("a")})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown value type")
+}
+
+func TestMarshalBinaryWriteExprError(t *testing.T) {
+	filter, err := Compile(`name == "x"`, nil)
+	require.NoError(t, err)
+
+	// Inject an unsupported value type to trigger writeValue error
+	bin := filter.expr.(*BinaryExpr)
+	bin.Right = &LiteralExpr{Value: ArrayValue{StringValue("a")}}
+
+	_, err = filter.MarshalBinary()
+	assert.Error(t, err)
+}
+
+func TestUnmarshalBinaryTruncatedDecoding(t *testing.T) {
+	// Helper: marshal a valid filter, then truncate at various offsets
+	compile := func(expr string) []byte {
+		f, err := Compile(expr, nil)
+		require.NoError(t, err)
+		data, err := f.MarshalBinary()
+		require.NoError(t, err)
+		return data
+	}
+
+	t.Run("truncated binary expr left", func(t *testing.T) {
+		data := compile(`a == 1 and b == 2`)
+		// Header(3) + BinaryExpr tag(1) + operator(1) = 5, truncate after operator
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:5])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated binary expr right", func(t *testing.T) {
+		data := compile(`a == 1 and b == 2`)
+		// Truncate partway through - after left subtree but before right completes
+		for i := 6; i < len(data)-1; i++ {
+			f := &Filter{}
+			err := f.UnmarshalBinary(data[:i])
+			if err != nil {
+				return // found a truncation point that errors
+			}
+		}
+		t.Fatal("expected at least one truncation to error")
+	})
+
+	t.Run("truncated unary operand", func(t *testing.T) {
+		data := compile(`not active`)
+		// Header(3) + UnaryExpr tag(1) + operator(1) = 5
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:5])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated field name", func(t *testing.T) {
+		data := compile(`name == "x"`)
+		// Header(3) + BinaryExpr(1) + op(1) + FieldExpr tag(1) + varint len(1) = 7
+		// Name is 4 bytes, truncate mid-name
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:9])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated literal string value", func(t *testing.T) {
+		data := compile(`name == "hello"`)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:len(data)-2])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated int value", func(t *testing.T) {
+		data := compile(`x == 999999999999`)
+		f := &Filter{}
+		// Truncate to cut into the varint
+		err := f.UnmarshalBinary(data[:len(data)-1])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated float value", func(t *testing.T) {
+		data := compile(`x == 3.14`)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:len(data)-3])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated IP value", func(t *testing.T) {
+		data := compile(`ip == 192.168.1.1`)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:len(data)-2])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated CIDR value ip", func(t *testing.T) {
+		data := compile(`ip in 10.0.0.0/8`)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:len(data)-3])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated CIDR value mask", func(t *testing.T) {
+		data := compile(`ip in 10.0.0.0/8`)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:len(data)-1])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated bytes value", func(t *testing.T) {
+		f, err := Compile(`data == "x"`, nil)
+		require.NoError(t, err)
+		bin := f.expr.(*BinaryExpr)
+		bin.Right = &LiteralExpr{Value: BytesValue([]byte("hello"))}
+		data, err := f.MarshalBinary()
+		require.NoError(t, err)
+
+		restored := &Filter{}
+		err = restored.UnmarshalBinary(data[:len(data)-2])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated array count", func(t *testing.T) {
+		data := compile(`x in {1, 2, 3}`)
+		// Header(3) + BinaryExpr(1) + op(1) + FieldExpr(~) = some offset
+		// Truncate just after the array tag
+		f := &Filter{}
+		for i := len(data) - 1; i > 3; i-- {
+			err := f.UnmarshalBinary(data[:i])
+			if err != nil {
+				return
+			}
+		}
+		t.Fatal("expected truncation error")
+	})
+
+	t.Run("truncated range end", func(t *testing.T) {
+		data := compile(`x in {1..100}`)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:len(data)-1])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated index object", func(t *testing.T) {
+		data := compile(`data["key"] == "val"`)
+		f := &Filter{}
+		// Truncate to cut into the index expression
+		for i := len(data) - 1; i > 3; i-- {
+			err := f.UnmarshalBinary(data[:i])
+			if err != nil {
+				return
+			}
+		}
+		t.Fatal("expected truncation error")
+	})
+
+	t.Run("truncated unpack array", func(t *testing.T) {
+		data := compile(`tags[*] == "x"`)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:len(data)-1])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated list ref name", func(t *testing.T) {
+		data := compile(`ip in $blocked_ips`)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:len(data)-3])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated function call name", func(t *testing.T) {
+		data := compile(`lower(name) == "x"`)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:8])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated function call arg count", func(t *testing.T) {
+		data := compile(`lower(name) == "x"`)
+		// Find where the function call starts and truncate after name but before arg count
+		f := &Filter{}
+		for i := 7; i < len(data)-1; i++ {
+			err := f.UnmarshalBinary(data[:i])
+			if err != nil {
+				return
+			}
+		}
+		t.Fatal("expected truncation error")
+	})
+
+	t.Run("truncated function call arg", func(t *testing.T) {
+		data := compile(`get_score(name) > 5.0`)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:len(data)-5])
+		assert.Error(t, err)
+	})
+
+	t.Run("empty body after valid header", func(t *testing.T) {
+		f := &Filter{}
+		err := f.UnmarshalBinary([]byte("WF\x01"))
+		assert.Error(t, err)
+	})
+
+	t.Run("readByte at EOF returns zero", func(t *testing.T) {
+		r := &decReader{data: []byte{}, pos: 0}
+		assert.Equal(t, byte(0), r.readByte())
+	})
+
+	t.Run("readN past end returns nil", func(t *testing.T) {
+		r := &decReader{data: []byte{1, 2}, pos: 0}
+		assert.Nil(t, r.readN(5))
+	})
+
+	t.Run("readUvarint truncated", func(t *testing.T) {
+		r := &decReader{data: []byte{0x80}, pos: 0} // incomplete varint
+		_, err := r.readUvarint()
+		assert.Error(t, err)
+	})
+
+	t.Run("readVarint truncated", func(t *testing.T) {
+		r := &decReader{data: []byte{0x80}, pos: 0} // incomplete varint
+		_, err := r.readVarint()
+		assert.Error(t, err)
+	})
+
+	t.Run("readUint64 truncated", func(t *testing.T) {
+		r := &decReader{data: []byte{1, 2, 3}, pos: 0}
+		_, err := r.readUint64()
+		assert.Error(t, err)
+	})
+
+	t.Run("readString truncated length", func(t *testing.T) {
+		r := &decReader{data: []byte{0x80}, pos: 0}
+		_, err := r.readString()
+		assert.Error(t, err)
+	})
+
+	t.Run("readByteSlice truncated length", func(t *testing.T) {
+		r := &decReader{data: []byte{0x80}, pos: 0}
+		_, err := r.readByteSlice()
+		assert.Error(t, err)
+	})
+
+	t.Run("readByteSlice truncated body", func(t *testing.T) {
+		r := &decReader{data: []byte{0x05, 0x01}, pos: 0} // says 5 bytes, only 1
+		_, err := r.readByteSlice()
+		assert.Error(t, err)
+	})
+
+	t.Run("readValue at EOF", func(t *testing.T) {
+		r := &decReader{data: []byte{}, pos: 0}
+		_, err := r.readValue()
+		assert.Error(t, err)
+	})
+
+	t.Run("readExpr at EOF", func(t *testing.T) {
+		r := &decReader{data: []byte{}, pos: 0}
+		_, err := r.readExpr()
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated range start", func(t *testing.T) {
+		// Range node tag + truncated start
+		f := &Filter{}
+		err := f.UnmarshalBinary([]byte{'W', 'F', 0x01, nodeTypeRange})
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated index index", func(t *testing.T) {
+		data := compile(`data["key"] == "val"`)
+		// Find the IndexExpr and truncate after object but before index completes
+		// The binary structure: BinaryExpr > IndexExpr > (FieldExpr "data", LiteralExpr "key")
+		// Truncate progressively to hit the index read error
+		f := &Filter{}
+		// Header(3) + BinaryExpr(1+1) + IndexExpr(1) + FieldExpr(1+1+4) = 12
+		// Next is the index LiteralExpr - truncate right there
+		err := f.UnmarshalBinary(data[:12])
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated array element", func(t *testing.T) {
+		data := compile(`x in {1, 2, 3}`)
+		// Truncate to keep array count but cut mid-element
+		// Header(3) + BinaryExpr(1+1) + Field(1+1+1) + ArrayExpr(1) + count(1) = 10
+		// Then 3 LiteralExprs, truncate after first
+		f := &Filter{}
+		err := f.UnmarshalBinary(data[:13])
+		assert.Error(t, err)
+	})
+
+	t.Run("writeExpr error in binary right", func(t *testing.T) {
+		// Create a BinaryExpr where Right contains an unsupported value
+		w := &encWriter{buf: make([]byte, 0, 64)}
+		expr := &BinaryExpr{
+			Left:     &FieldExpr{Name: "x"},
+			Operator: TokenEq,
+			Right:    &LiteralExpr{Value: ArrayValue{StringValue("a")}},
+		}
+		err := w.writeExpr(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("writeExpr error in binary left", func(t *testing.T) {
+		w := &encWriter{buf: make([]byte, 0, 64)}
+		expr := &BinaryExpr{
+			Left:     &LiteralExpr{Value: ArrayValue{}},
+			Operator: TokenEq,
+			Right:    &FieldExpr{Name: "x"},
+		}
+		err := w.writeExpr(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("writeExpr error in unary operand", func(t *testing.T) {
+		w := &encWriter{buf: make([]byte, 0, 64)}
+		expr := &UnaryExpr{
+			Operator: TokenNot,
+			Operand:  &LiteralExpr{Value: ArrayValue{}},
+		}
+		err := w.writeExpr(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("writeExpr error in array element", func(t *testing.T) {
+		w := &encWriter{buf: make([]byte, 0, 64)}
+		expr := &ArrayExpr{
+			Elements: []Expression{&LiteralExpr{Value: ArrayValue{}}},
+		}
+		err := w.writeExpr(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("writeExpr error in range start", func(t *testing.T) {
+		w := &encWriter{buf: make([]byte, 0, 64)}
+		expr := &RangeExpr{
+			Start: &LiteralExpr{Value: ArrayValue{}},
+			End:   &LiteralExpr{Value: IntValue(10)},
+		}
+		err := w.writeExpr(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("writeExpr error in range end", func(t *testing.T) {
+		w := &encWriter{buf: make([]byte, 0, 64)}
+		expr := &RangeExpr{
+			Start: &LiteralExpr{Value: IntValue(1)},
+			End:   &LiteralExpr{Value: ArrayValue{}},
+		}
+		err := w.writeExpr(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("writeExpr error in index object", func(t *testing.T) {
+		w := &encWriter{buf: make([]byte, 0, 64)}
+		expr := &IndexExpr{
+			Object: &LiteralExpr{Value: ArrayValue{}},
+			Index:  &LiteralExpr{Value: StringValue("key")},
+		}
+		err := w.writeExpr(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("writeExpr error in index key", func(t *testing.T) {
+		w := &encWriter{buf: make([]byte, 0, 64)}
+		expr := &IndexExpr{
+			Object: &FieldExpr{Name: "data"},
+			Index:  &LiteralExpr{Value: ArrayValue{}},
+		}
+		err := w.writeExpr(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("writeExpr error in unpack array", func(t *testing.T) {
+		w := &encWriter{buf: make([]byte, 0, 64)}
+		expr := &UnpackExpr{
+			Array: &LiteralExpr{Value: ArrayValue{}},
+		}
+		err := w.writeExpr(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("writeExpr error in function call arg", func(t *testing.T) {
+		w := &encWriter{buf: make([]byte, 0, 64)}
+		expr := &FunctionCallExpr{
+			Name:      "fn",
+			Arguments: []Expression{&LiteralExpr{Value: ArrayValue{}}},
+		}
+		err := w.writeExpr(expr)
+		assert.Error(t, err)
+	})
+
+	t.Run("readExpr truncated binary right", func(t *testing.T) {
+		// Manually construct: BinaryExpr + op + valid left FieldExpr, then EOF
+		data := []byte("WF\x01")
+		data = append(data, nodeTypeBinary, byte(TokenEq))
+		data = append(data, nodeTypeField, 0x01, 'x') // left = FieldExpr "x"
+		// no right expr
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+	})
+
+	t.Run("readExpr truncated function arg", func(t *testing.T) {
+		// FunctionCall "fn" with 1 arg but no arg data
+		data := []byte("WF\x01")
+		data = append(data, nodeTypeFunctionCall)
+		data = append(data, 0x02, 'f', 'n') // name = "fn"
+		data = append(data, 0x01)           // 1 argument
+		// no arg data
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+	})
+
+	t.Run("readExpr array truncated count", func(t *testing.T) {
+		// ArrayExpr tag + incomplete varint for count
+		data := []byte("WF\x01")
+		data = append(data, nodeTypeArray, 0x80) // 0x80 = incomplete varint
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+	})
+
+	t.Run("readExpr index truncated object", func(t *testing.T) {
+		// IndexExpr tag + EOF (no object)
+		data := []byte("WF\x01")
+		data = append(data, nodeTypeIndex)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+	})
+
+	t.Run("readExpr unpack truncated array", func(t *testing.T) {
+		// UnpackExpr tag + EOF (no array)
+		data := []byte("WF\x01")
+		data = append(data, nodeTypeUnpack)
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+	})
+
+	t.Run("readExpr function call truncated count", func(t *testing.T) {
+		// FunctionCall tag + name "fn" + incomplete varint for arg count
+		data := []byte("WF\x01")
+		data = append(data, nodeTypeFunctionCall)
+		data = append(data, 0x02, 'f', 'n') // name = "fn"
+		data = append(data, 0x80)           // incomplete varint
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+	})
+
+	t.Run("readValue CIDR truncated ip bytes", func(t *testing.T) {
+		// LiteralExpr + CIDR tag + incomplete IP byte slice
+		data := []byte("WF\x01")
+		data = append(data, nodeTypeLiteral, valTypeCIDR, 0x80) // incomplete varint for IP length
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+	})
+
+	t.Run("readValue truncated bool", func(t *testing.T) {
+		// LiteralExpr + BoolValue tag, but no bool byte
+		r := &decReader{data: []byte{valTypeBool}, pos: 0}
+		val, err := r.readValue()
+		// readByte at EOF returns 0, which means BoolValue(false) - not an error
+		assert.NoError(t, err)
+		assert.Equal(t, BoolValue(false), val)
+	})
+}
+
 func BenchmarkMarshalBinary(b *testing.B) {
 	filter, _ := Compile(
 		`(lower(http.host) == "example.com" or http.host wildcard "*.example.com") and http.status >= 400 and ip.src not in $blocked_ips`,

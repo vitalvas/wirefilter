@@ -521,6 +521,71 @@ func TestIPv6Support(t *testing.T) {
 	})
 }
 
+func TestNormalizeIP(t *testing.T) {
+	t.Run("nil", func(t *testing.T) {
+		assert.Nil(t, NormalizeIP(nil))
+	})
+
+	t.Run("ipv4", func(t *testing.T) {
+		ip := NormalizeIP(net.ParseIP("192.168.1.1"))
+		assert.Len(t, ip, 4)
+		assert.Equal(t, "192.168.1.1", ip.String())
+	})
+
+	t.Run("ipv6", func(t *testing.T) {
+		ip := NormalizeIP(net.ParseIP("2001:db8::1"))
+		assert.Len(t, ip, 16)
+		assert.Equal(t, "2001:db8::1", ip.String())
+	})
+
+	t.Run("ipv4-mapped ipv6 normalized to ipv4", func(t *testing.T) {
+		ip := NormalizeIP(net.ParseIP("::ffff:192.168.1.1"))
+		assert.Len(t, ip, 4)
+		assert.Equal(t, "192.168.1.1", ip.String())
+	})
+}
+
+func TestIPv4MappedIPv6Behavior(t *testing.T) {
+	t.Run("is_ipv4 returns true for mapped address", func(t *testing.T) {
+		ip := NormalizeIP(net.ParseIP("::ffff:10.0.0.1"))
+		assert.True(t, IsIPv4(ip))
+	})
+
+	t.Run("is_ipv6 returns false for mapped address", func(t *testing.T) {
+		ip := NormalizeIP(net.ParseIP("::ffff:10.0.0.1"))
+		assert.False(t, IsIPv6(ip))
+	})
+
+	t.Run("equality between mapped and plain ipv4", func(t *testing.T) {
+		mapped := IPValue{IP: NormalizeIP(net.ParseIP("::ffff:192.168.1.1"))}
+		plain := IPValue{IP: NormalizeIP(net.ParseIP("192.168.1.1"))}
+		assert.True(t, mapped.Equal(plain))
+		assert.Equal(t, mapped.String(), plain.String())
+	})
+
+	t.Run("SetIPField normalizes mapped address", func(t *testing.T) {
+		filter, _ := Compile(`ip == 192.168.1.1`, nil)
+		ctx := NewExecutionContext().SetIPField("ip", "::ffff:192.168.1.1")
+		result, _ := filter.Execute(ctx)
+		assert.True(t, result)
+	})
+
+	t.Run("encoding roundtrip stable for mapped address", func(t *testing.T) {
+		filter, _ := Compile(`ip == 192.168.1.1`, nil)
+		ctx := NewExecutionContext().SetIPField("ip", "::ffff:192.168.1.1")
+
+		data, err := filter.MarshalBinary()
+		assert.NoError(t, err)
+
+		restored := &Filter{}
+		assert.NoError(t, restored.UnmarshalBinary(data))
+
+		r1, _ := filter.Execute(ctx)
+		r2, _ := restored.Execute(ctx)
+		assert.Equal(t, r1, r2)
+	})
+}
+
 func TestBytesValueEqualSameLengthDifferentContent(t *testing.T) {
 	bv1 := BytesValue([]byte("test"))
 	bv2 := BytesValue([]byte("best"))

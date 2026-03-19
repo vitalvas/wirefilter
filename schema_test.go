@@ -572,3 +572,25 @@ func TestSchemaExport(t *testing.T) {
 		assert.Empty(t, exported)
 	})
 }
+
+func TestSchemaValidationEdgeCases(t *testing.T) {
+	t.Run("range start unknown field", func(t *testing.T) {
+		schema := NewSchema().AddField("x", TypeInt)
+		_, err := Compile(`x in {unknown..10}`, schema)
+		assert.Error(t, err)
+	})
+
+	t.Run("validate func args no custom funcs registered", func(t *testing.T) {
+		schema := NewSchema().AddField("name", TypeString)
+		// Schema has no customFuncs, so validateFuncArgs returns nil
+		_, err := Compile(`lower(name) == "test"`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("validate operator type with unknown field type", func(t *testing.T) {
+		// CIDR type is not in operatorsByType for most operators, so skip validation
+		schema := NewSchema().AddField("net", TypeCIDR)
+		_, err := Compile(`net == net`, schema)
+		assert.NoError(t, err)
+	})
+}

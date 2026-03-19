@@ -279,6 +279,20 @@ func (m MapValue) Get(key string) (Value, bool) {
 	return val, ok
 }
 
+// NormalizeIP returns the canonical form of an IP address per RFC 4291.
+// IPv4-mapped IPv6 addresses (::ffff:x.x.x.x) are normalized to their
+// 4-byte IPv4 form. Pure IPv6 addresses are returned as 16-byte form.
+// Returns nil if the input is nil.
+func NormalizeIP(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4
+	}
+	return ip.To16()
+}
+
 // IPInCIDR checks if an IP address is within the specified CIDR range.
 func IPInCIDR(ip net.IP, cidr string) (bool, error) {
 	_, ipNet, err := net.ParseCIDR(cidr)

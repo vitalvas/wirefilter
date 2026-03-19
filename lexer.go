@@ -368,7 +368,7 @@ func (l *Lexer) readIdentifierToken() Token {
 		}
 		// Try to parse as IP if it looks like one (starts with digit or contains colon for IPv6)
 		if looksLikeIP(literal) {
-			if ip := net.ParseIP(literal); ip != nil {
+			if ip := NormalizeIP(net.ParseIP(literal)); ip != nil {
 				tok.Type = TokenIP
 				tok.Value = ip
 				return tok
@@ -468,7 +468,7 @@ func (l *Lexer) readNumberToken() Token {
 
 	// Try to parse as IP (contains . or :)
 	if looksLikeIP(literal) {
-		if ip := net.ParseIP(literal); ip != nil {
+		if ip := NormalizeIP(net.ParseIP(literal)); ip != nil {
 			return Token{
 				Type:    TokenIP,
 				Literal: literal,

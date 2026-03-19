@@ -92,7 +92,7 @@ func (ctx *ExecutionContext) SetBoolField(name string, value bool) *ExecutionCon
 // The value string will be parsed as an IP address.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetIPField(name string, value string) *ExecutionContext {
-	ip := net.ParseIP(value)
+	ip := NormalizeIP(net.ParseIP(value))
 	if ip != nil {
 		ctx.fields[name] = IPValue{IP: ip}
 	}
@@ -188,7 +188,7 @@ func (ctx *ExecutionContext) SetIPList(name string, values []string) *ExecutionC
 			arr = append(arr, CIDRValue{IPNet: ipNet})
 			continue
 		}
-		if ip := net.ParseIP(v); ip != nil {
+		if ip := NormalizeIP(net.ParseIP(v)); ip != nil {
 			arr = append(arr, IPValue{IP: ip})
 		}
 	}
@@ -249,7 +249,7 @@ func (ctx *ExecutionContext) SetTableIPList(name string, data map[string][]strin
 				arr = append(arr, CIDRValue{IPNet: ipNet})
 				continue
 			}
-			if ip := net.ParseIP(v); ip != nil {
+			if ip := NormalizeIP(net.ParseIP(v)); ip != nil {
 				arr = append(arr, IPValue{IP: ip})
 			}
 		}

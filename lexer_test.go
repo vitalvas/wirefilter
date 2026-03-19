@@ -788,3 +788,48 @@ func TestLexer(t *testing.T) {
 		assert.Equal(t, "nets", tok.Literal)
 	})
 }
+
+func TestLexerCIDRAndIPParsing(t *testing.T) {
+	t.Run("valid CIDR starting with letter in identifier path", func(t *testing.T) {
+		// fe80::/10 starts with 'f', enters readIdentifierToken
+		lexer := NewLexer(`ip in fe80::/10`)
+		lexer.NextToken() // ip
+		lexer.NextToken() // in
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenCIDR, tok.Type)
+	})
+
+	t.Run("looks like CIDR but invalid in identifier path", func(t *testing.T) {
+		// Starts with letter, has '/', looksLikeCIDR true, but ParseCIDR fails
+		lexer := NewLexer(`ip in fzzz::/999`)
+		lexer.NextToken() // ip
+		lexer.NextToken() // in
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenIdent, tok.Type)
+	})
+
+	t.Run("looks like IP but invalid in identifier path", func(t *testing.T) {
+		// Starts with letter, has ':', looksLikeIP true, but ParseIP fails
+		lexer := NewLexer(`x == fzzz::gggg`)
+		lexer.NextToken() // x
+		lexer.NextToken() // ==
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenIdent, tok.Type)
+	})
+
+	t.Run("valid inline IPv6 CIDR from number path", func(t *testing.T) {
+		lexer := NewLexer(`ip in 2001:db8::/32`)
+		lexer.NextToken() // ip
+		lexer.NextToken() // in
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenCIDR, tok.Type)
+	})
+
+	t.Run("valid IPv6 IP starting with letter", func(t *testing.T) {
+		lexer := NewLexer(`ip == fe80::1`)
+		lexer.NextToken() // ip
+		lexer.NextToken() // ==
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenIP, tok.Type)
+	})
+}

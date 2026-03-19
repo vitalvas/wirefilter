@@ -796,6 +796,45 @@ func TestExecutionContextExport(t *testing.T) {
 		exported := ctx.Export()
 		assert.Empty(t, exported)
 	})
+
+	t.Run("nil field value", func(t *testing.T) {
+		ctx := NewExecutionContext().SetField("x", nil)
+		exported := ctx.Export()
+		assert.Nil(t, exported["x"])
+	})
+
+	t.Run("bytes field value", func(t *testing.T) {
+		ctx := NewExecutionContext().SetBytesField("data", []byte("hello"))
+		exported := ctx.Export()
+		assert.Equal(t, "hello", exported["data"])
+	})
+
+	t.Run("ip field value", func(t *testing.T) {
+		ctx := NewExecutionContext().SetIPField("ip", "192.0.2.1")
+		exported := ctx.Export()
+		assert.Equal(t, "192.0.2.1", exported["ip"])
+	})
+
+	t.Run("cidr value in list", func(t *testing.T) {
+		ctx := NewExecutionContext().SetIPList("nets", []string{"192.0.2.0/24"})
+		exported := ctx.ExportLists()
+		items := exported["nets"].([]any)
+		assert.Equal(t, "192.0.2.0/24", items[0])
+	})
+}
+
+func TestExportValueUnknownType(t *testing.T) {
+	// UnpackedArrayValue is a valid Value that exportValue handles via default
+	val := UnpackedArrayValue{Array: ArrayValue{StringValue("a")}}
+	result := exportValue(val)
+	assert.Equal(t, val.String(), result)
+}
+
+func TestWriteCacheKeyValueMultipleArrayElements(t *testing.T) {
+	// Covers the i > 0 separator branch in writeCacheKeyValue for arrays
+	arr := ArrayValue{StringValue("a"), StringValue("b")}
+	key := cacheKey("fn", []Value{arr})
+	assert.Contains(t, key, ", ")
 }
 
 func TestExecutionContextExportLists(t *testing.T) {

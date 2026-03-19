@@ -327,13 +327,13 @@ func (f *Filter) evaluateEquality(left, right Value) (Value, error) {
 	}
 	switch {
 	case left.Type() == TypeIP && right.Type() == TypeString:
-		ip := net.ParseIP(string(right.(StringValue)))
+		ip := NormalizeIP(net.ParseIP(string(right.(StringValue))))
 		if ip == nil {
 			return BoolValue(false), nil
 		}
 		right = IPValue{IP: ip}
 	case left.Type() == TypeString && right.Type() == TypeIP:
-		ip := net.ParseIP(string(left.(StringValue)))
+		ip := NormalizeIP(net.ParseIP(string(left.(StringValue))))
 		if ip == nil {
 			return BoolValue(false), nil
 		}
