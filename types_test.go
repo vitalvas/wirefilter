@@ -232,16 +232,16 @@ func TestTypeString(t *testing.T) {
 		t    Type
 		name string
 	}{
-		{TypeString, "String"},
-		{TypeInt, "Int"},
-		{TypeFloat, "Float"},
-		{TypeBool, "Bool"},
-		{TypeIP, "IP"},
-		{TypeCIDR, "CIDR"},
-		{TypeBytes, "Bytes"},
-		{TypeArray, "Array"},
-		{TypeMap, "Map"},
-		{Type(99), "Unknown"},
+		{TypeString, "string"},
+		{TypeInt, "int"},
+		{TypeFloat, "float"},
+		{TypeBool, "bool"},
+		{TypeIP, "ip"},
+		{TypeCIDR, "cidr"},
+		{TypeBytes, "bytes"},
+		{TypeArray, "array"},
+		{TypeMap, "map"},
+		{Type(99), "unknown"},
 	}
 	for _, tt := range tests {
 		assert.Equal(t, tt.name, tt.t.String())

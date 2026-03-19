@@ -27,25 +27,25 @@ const (
 func (t Type) String() string {
 	switch t {
 	case TypeString:
-		return "String"
+		return "string"
 	case TypeInt:
-		return "Int"
+		return "int"
 	case TypeFloat:
-		return "Float"
+		return "float"
 	case TypeBool:
-		return "Bool"
+		return "bool"
 	case TypeIP:
-		return "IP"
+		return "ip"
 	case TypeCIDR:
-		return "CIDR"
+		return "cidr"
 	case TypeBytes:
-		return "Bytes"
+		return "bytes"
 	case TypeArray:
-		return "Array"
+		return "array"
 	case TypeMap:
-		return "Map"
+		return "map"
 	default:
-		return "Unknown"
+		return "unknown"
 	}
 }
 

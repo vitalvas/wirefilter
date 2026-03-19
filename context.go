@@ -415,6 +415,62 @@ func (ctx *ExecutionContext) setCache(key string, val Value) {
 	ctx.cache[key] = val
 }
 
+// Export returns a flat map of field names to their values for use in audit logs.
+// The output uses native Go types that json.Marshal handles directly.
+func (ctx *ExecutionContext) Export() map[string]any {
+	result := make(map[string]any, len(ctx.fields))
+	for name, val := range ctx.fields {
+		result[name] = exportValue(val)
+	}
+	return result
+}
+
+// ExportLists returns a flat map of list names to their values for use in audit logs.
+func (ctx *ExecutionContext) ExportLists() map[string]any {
+	result := make(map[string]any, len(ctx.lists))
+	for name, list := range ctx.lists {
+		result[name] = exportValue(list)
+	}
+	return result
+}
+
+// exportValue converts a Value to a JSON-friendly representation.
+func exportValue(v Value) any {
+	if v == nil {
+		return nil
+	}
+	switch val := v.(type) {
+	case StringValue:
+		return string(val)
+	case IntValue:
+		return int64(val)
+	case FloatValue:
+		return float64(val)
+	case BoolValue:
+		return bool(val)
+	case IPValue:
+		return val.IP.String()
+	case CIDRValue:
+		return val.IPNet.String()
+	case BytesValue:
+		return string(val)
+	case ArrayValue:
+		items := make([]any, len(val))
+		for i, elem := range val {
+			items[i] = exportValue(elem)
+		}
+		return items
+	case MapValue:
+		m := make(map[string]any, len(val))
+		for k, elem := range val {
+			m[k] = exportValue(elem)
+		}
+		return m
+	default:
+		return v.String()
+	}
+}
+
 // cacheKey builds a cache key for a function call.
 // It includes value types at every level of the value tree to prevent
 // collisions across different types, including nested elements in

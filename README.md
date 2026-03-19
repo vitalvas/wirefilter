@@ -414,13 +414,13 @@ schema := wirefilter.NewSchema().
 // Valid: > works on Int
 _, err := wirefilter.Compile(`status > 400`, schema)
 
-// Invalid: > does not work on String
+// Invalid: > does not work on string
 _, err = wirefilter.Compile(`name > "test"`, schema)
-// Error: operator > is not valid for field type String
+// Error: operator > is not valid for field type string
 
-// Invalid: contains does not work on IP
+// Invalid: contains does not work on ip
 _, err = wirefilter.Compile(`ip contains "10"`, schema)
-// Error: operator contains is not valid for field type IP
+// Error: operator contains is not valid for field type ip
 ```
 
 Type validation rules:
@@ -737,6 +737,66 @@ filter.SetMeta(wirefilter.RuleMeta{
 meta := filter.Meta()
 fmt.Println(meta.ID)              // "WAF-1001"
 fmt.Println(meta.Tags["severity"]) // "high"
+```
+
+### Exporting for Audit Logs
+
+Export schema and execution context as JSON-friendly structures for audit logging.
+
+#### Schema Export
+
+Returns a flat map of field names to their types:
+
+```go
+schema := wirefilter.NewSchema().
+    AddField("http.host", wirefilter.TypeString).
+    AddField("http.status", wirefilter.TypeInt).
+    AddField("ip.src", wirefilter.TypeIP)
+
+exported := schema.Export()
+// map[string]wirefilter.Type{
+//     "http.host":   wirefilter.TypeString,
+//     "http.status": wirefilter.TypeInt,
+//     "ip.src":      wirefilter.TypeIP,
+// }
+```
+
+#### Context Export
+
+Returns a flat map of field values, directly compatible with `json.Marshal`:
+
+```go
+ctx := wirefilter.NewExecutionContext().
+    SetStringField("http.host", "example.com").
+    SetIntField("http.status", 200).
+    SetIPField("ip.src", "192.0.2.1").
+    SetArrayField("tags", []string{"production", "v2"}).
+    SetMapField("headers", map[string]string{"content-type": "application/json"})
+
+exported := ctx.Export()
+// map[string]any{
+//     "http.host":   "example.com",
+//     "http.status": int64(200),
+//     "ip.src":      "192.0.2.1",
+//     "tags":        []any{"production", "v2"},
+//     "headers":     map[string]any{"content-type": "application/json"},
+// }
+```
+
+#### Lists Export
+
+Returns a flat map of list names to their values:
+
+```go
+ctx := wirefilter.NewExecutionContext().
+    SetList("allowed_roles", []string{"viewer", "editor"}).
+    SetIPList("blocked_nets", []string{"192.0.2.0/24", "198.51.100.1"})
+
+exported := ctx.ExportLists()
+// map[string]any{
+//     "allowed_roles": []any{"viewer", "editor"},
+//     "blocked_nets":  []any{"192.0.2.0/24", "198.51.100.1"},
+// }
 ```
 
 ## Data Types

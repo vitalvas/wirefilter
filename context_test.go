@@ -767,6 +767,65 @@ func TestExecuteWithCache(t *testing.T) {
 	})
 }
 
+func TestExecutionContextExport(t *testing.T) {
+	t.Run("flat field export", func(t *testing.T) {
+		ctx := NewExecutionContext().
+			SetStringField("http.host", "example.com").
+			SetIntField("http.status", 200).
+			SetFloatField("score", 3.14).
+			SetBoolField("active", true).
+			SetIPField("ip.src", "192.0.2.1").
+			SetArrayField("tags", []string{"a", "b"}).
+			SetMapField("attrs", map[string]string{"key1": "val1", "key2": "val2"})
+
+		exported := ctx.Export()
+		assert.Equal(t, "example.com", exported["http.host"])
+		assert.Equal(t, int64(200), exported["http.status"])
+		assert.Equal(t, 3.14, exported["score"])
+		assert.Equal(t, true, exported["active"])
+		assert.Equal(t, "192.0.2.1", exported["ip.src"])
+		assert.Equal(t, []any{"a", "b"}, exported["tags"])
+
+		attrs := exported["attrs"].(map[string]any)
+		assert.Equal(t, "val1", attrs["key1"])
+		assert.Equal(t, "val2", attrs["key2"])
+	})
+
+	t.Run("empty context", func(t *testing.T) {
+		ctx := NewExecutionContext()
+		exported := ctx.Export()
+		assert.Empty(t, exported)
+	})
+}
+
+func TestExecutionContextExportLists(t *testing.T) {
+	t.Run("string lists", func(t *testing.T) {
+		ctx := NewExecutionContext().
+			SetList("roles", []string{"viewer", "editor"}).
+			SetList("zones", []string{"a", "b", "c"})
+
+		exported := ctx.ExportLists()
+		assert.Equal(t, []any{"viewer", "editor"}, exported["roles"])
+		assert.Equal(t, []any{"a", "b", "c"}, exported["zones"])
+		assert.Len(t, exported, 2)
+	})
+
+	t.Run("ip lists", func(t *testing.T) {
+		ctx := NewExecutionContext().
+			SetIPList("nets", []string{"192.0.2.0/24", "198.51.100.1"})
+
+		exported := ctx.ExportLists()
+		items := exported["nets"].([]any)
+		assert.Len(t, items, 2)
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		ctx := NewExecutionContext()
+		exported := ctx.ExportLists()
+		assert.Empty(t, exported)
+	})
+}
+
 func TestCacheCoverageEdgeCases(t *testing.T) {
 	t.Run("cache key with nil arg", func(t *testing.T) {
 		callCount := 0

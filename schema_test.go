@@ -549,3 +549,26 @@ func TestSchemaComplexityLimits(t *testing.T) {
 		assert.Contains(t, err.Error(), "exceeds maximum node count")
 	})
 }
+
+func TestSchemaExport(t *testing.T) {
+	t.Run("fields", func(t *testing.T) {
+		schema := NewSchema().
+			AddField("http.host", TypeString).
+			AddField("http.status", TypeInt).
+			AddField("ip.src", TypeIP).
+			AddField("active", TypeBool)
+
+		exported := schema.Export()
+		assert.Equal(t, TypeString, exported["http.host"])
+		assert.Equal(t, TypeInt, exported["http.status"])
+		assert.Equal(t, TypeIP, exported["ip.src"])
+		assert.Equal(t, TypeBool, exported["active"])
+		assert.Len(t, exported, 4)
+	})
+
+	t.Run("empty schema", func(t *testing.T) {
+		schema := NewSchema()
+		exported := schema.Export()
+		assert.Empty(t, exported)
+	})
+}

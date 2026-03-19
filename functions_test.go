@@ -632,7 +632,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 
 		_, err := Compile(`get_score(count) > 5.0`, schema)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "expected String, got Int")
+		assert.Contains(t, err.Error(), "expected string, got int")
 	})
 
 	t.Run("schema allows nil arg types (skip validation)", func(t *testing.T) {

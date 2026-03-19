@@ -2767,7 +2767,7 @@ func TestFilterFloat(t *testing.T) {
 	})
 
 	t.Run("float type string", func(t *testing.T) {
-		assert.Equal(t, "Float", TypeFloat.String())
+		assert.Equal(t, "float", TypeFloat.String())
 	})
 
 	t.Run("float comparison with non-numeric", func(t *testing.T) {

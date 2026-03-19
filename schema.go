@@ -360,6 +360,15 @@ func (v *validator) validateOperatorType(expr *BinaryExpr) error {
 	return nil
 }
 
+// Export returns a flat map of field names to their types for use in audit logs.
+func (s *Schema) Export() map[string]Type {
+	result := make(map[string]Type, len(s.fields))
+	for name, field := range s.fields {
+		result[name] = field.Type
+	}
+	return result
+}
+
 // resolveFieldType returns the type of a direct field expression.
 // Unpack, index, and function call expressions are skipped since
 // the resulting element type is not known at the schema level.
