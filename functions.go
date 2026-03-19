@@ -18,6 +18,8 @@ func (f *Filter) evaluateFunctionCall(expr *FunctionCallExpr, ctx *ExecutionCont
 		return f.fnAny(expr.Arguments, ctx)
 	case "all":
 		return f.fnAll(expr.Arguments, ctx)
+	case "now":
+		return TimeValue{Time: ctx.now()}, nil
 	}
 
 	// Evaluate all arguments for standard functions

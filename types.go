@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Type represents the data type of a value in the filter system.
@@ -21,6 +22,8 @@ const (
 	TypeBytes
 	TypeArray
 	TypeMap
+	TypeTime
+	TypeDuration
 )
 
 // String returns the string representation of a data type.
@@ -44,6 +47,10 @@ func (t Type) String() string {
 		return "array"
 	case TypeMap:
 		return "map"
+	case TypeTime:
+		return "time"
+	case TypeDuration:
+		return "duration"
 	default:
 		return "unknown"
 	}
@@ -277,6 +284,116 @@ func (m MapValue) Equal(v Value) bool {
 func (m MapValue) Get(key string) (Value, bool) {
 	val, ok := m[key]
 	return val, ok
+}
+
+// TimeValue represents a point in time.
+type TimeValue struct {
+	Time time.Time
+}
+
+func (t TimeValue) Type() Type     { return TypeTime }
+func (t TimeValue) IsTruthy() bool { return true }
+func (t TimeValue) String() string { return t.Time.Format(time.RFC3339Nano) }
+func (t TimeValue) Equal(v Value) bool {
+	if v.Type() != TypeTime {
+		return false
+	}
+	return t.Time.Equal(v.(TimeValue).Time)
+}
+
+// DurationValue represents a duration of time.
+type DurationValue time.Duration
+
+func (d DurationValue) Type() Type     { return TypeDuration }
+func (d DurationValue) IsTruthy() bool { return true }
+func (d DurationValue) Equal(v Value) bool {
+	if v.Type() != TypeDuration {
+		return false
+	}
+	return time.Duration(d) == time.Duration(v.(DurationValue))
+}
+
+// String returns a human-readable duration with day support.
+func (d DurationValue) String() string {
+	dur := time.Duration(d)
+	if dur == 0 {
+		return "0s"
+	}
+
+	var sb strings.Builder
+	if dur < 0 {
+		sb.WriteByte('-')
+		dur = -dur
+	}
+
+	days := dur / (24 * time.Hour)
+	dur -= days * 24 * time.Hour
+	hours := dur / time.Hour
+	dur -= hours * time.Hour
+	minutes := dur / time.Minute
+	dur -= minutes * time.Minute
+	seconds := dur / time.Second
+
+	if days > 0 {
+		fmt.Fprintf(&sb, "%dd", days)
+	}
+	if hours > 0 {
+		fmt.Fprintf(&sb, "%dh", hours)
+	}
+	if minutes > 0 {
+		fmt.Fprintf(&sb, "%dm", minutes)
+	}
+	if seconds > 0 {
+		fmt.Fprintf(&sb, "%ds", seconds)
+	}
+
+	if sb.Len() == 0 || (sb.Len() == 1 && sb.String()[0] == '-') {
+		return "0s"
+	}
+
+	return sb.String()
+}
+
+// IntervalValue represents a non-materialized range for time/duration membership tests.
+type IntervalValue struct {
+	Start Value
+	End   Value
+}
+
+func (iv IntervalValue) Type() Type     { return iv.Start.Type() }
+func (iv IntervalValue) IsTruthy() bool { return true }
+func (iv IntervalValue) String() string {
+	return fmt.Sprintf("%s..%s", iv.Start.String(), iv.End.String())
+}
+func (iv IntervalValue) Equal(v Value) bool {
+	other, ok := v.(IntervalValue)
+	if !ok {
+		return false
+	}
+	return iv.Start.Equal(other.Start) && iv.End.Equal(other.End)
+}
+
+// Contains checks if a value falls within the interval [Start, End].
+func (iv IntervalValue) Contains(v Value) bool {
+	switch iv.Start.Type() {
+	case TypeTime:
+		if v.Type() != TypeTime {
+			return false
+		}
+		t := v.(TimeValue).Time
+		start := iv.Start.(TimeValue).Time
+		end := iv.End.(TimeValue).Time
+		return !t.Before(start) && !t.After(end)
+	case TypeDuration:
+		if v.Type() != TypeDuration {
+			return false
+		}
+		d := time.Duration(v.(DurationValue))
+		start := time.Duration(iv.Start.(DurationValue))
+		end := time.Duration(iv.End.(DurationValue))
+		return d >= start && d <= end
+	}
+	return false
 }
 
 // NormalizeIP returns the canonical form of an IP address per RFC 4291.

@@ -9,6 +9,7 @@ import (
 	"net"
 	"regexp"
 	"sync"
+	"time"
 )
 
 // Binary encoding format:
@@ -32,14 +33,16 @@ const (
 
 // Value type tags:
 const (
-	valTypeNil    byte = 0x00
-	valTypeString byte = 0x01
-	valTypeInt    byte = 0x02
-	valTypeBool   byte = 0x03
-	valTypeIP     byte = 0x04
-	valTypeCIDR   byte = 0x05
-	valTypeBytes  byte = 0x06
-	valTypeFloat  byte = 0x07
+	valTypeNil      byte = 0x00
+	valTypeString   byte = 0x01
+	valTypeInt      byte = 0x02
+	valTypeBool     byte = 0x03
+	valTypeIP       byte = 0x04
+	valTypeCIDR     byte = 0x05
+	valTypeBytes    byte = 0x06
+	valTypeFloat    byte = 0x07
+	valTypeTime     byte = 0x08
+	valTypeDuration byte = 0x09
 )
 
 const (
@@ -258,6 +261,14 @@ func (w *encWriter) writeValue(v Value) error {
 	case BytesValue:
 		w.writeByte(valTypeBytes)
 		w.writeByteSlice([]byte(val))
+
+	case TimeValue:
+		w.writeByte(valTypeTime)
+		w.writeVarint(val.Time.UnixNano())
+
+	case DurationValue:
+		w.writeByte(valTypeDuration)
+		w.writeVarint(int64(val))
 
 	default:
 		return fmt.Errorf("wirefilter: unknown value type: %T", v)
@@ -520,6 +531,20 @@ func (r *decReader) readValue() (Value, error) {
 			return nil, err
 		}
 		return BytesValue(b), nil
+
+	case valTypeTime:
+		ns, err := r.readVarint()
+		if err != nil {
+			return nil, err
+		}
+		return TimeValue{Time: time.Unix(0, ns).UTC()}, nil
+
+	case valTypeDuration:
+		d, err := r.readVarint()
+		if err != nil {
+			return nil, err
+		}
+		return DurationValue(d), nil
 	}
 
 	return nil, fmt.Errorf("%w: 0x%02x", errInvalidValue, tag)

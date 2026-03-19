@@ -622,3 +622,285 @@ func TestSchemaValidationEdgeCases(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestTypedArrayField(t *testing.T) {
+	t.Run("valid unpack operations on typed array", func(t *testing.T) {
+		schema := NewSchema().
+			AddArrayField("tags", TypeString).
+			AddArrayField("ports", TypeInt)
+
+		valid := []string{
+			`tags[*] == "admin"`,
+			`tags[*] != "blocked"`,
+			`tags[*] contains "prod"`,
+			`tags[*] matches "^admin"`,
+			`tags[*] in {"a", "b"}`,
+			`tags[*] wildcard "*.com"`,
+			`ports[*] >= 1024`,
+			`ports[*] < 65535`,
+			`ports[*] == 443`,
+			`ports[*] in {80, 443}`,
+		}
+		for _, expr := range valid {
+			_, err := Compile(expr, schema)
+			assert.NoError(t, err, "should be valid: %s", expr)
+		}
+	})
+
+	t.Run("invalid unpack operations on typed array", func(t *testing.T) {
+		schema := NewSchema().
+			AddArrayField("tags", TypeString).
+			AddArrayField("ports", TypeInt)
+
+		invalid := []string{
+			`tags[*] > 10`,
+			`tags[*] >= 5`,
+			`ports[*] contains "x"`,
+			`ports[*] matches "^[0-9]+"`,
+			`ports[*] wildcard "80*"`,
+		}
+		for _, expr := range invalid {
+			_, err := Compile(expr, schema)
+			assert.Error(t, err, "should be invalid: %s", expr)
+			assert.Contains(t, err.Error(), "not valid for field type")
+		}
+	})
+
+	t.Run("untyped array still skips element validation", func(t *testing.T) {
+		schema := NewSchema().AddField("tags", TypeArray)
+		_, err := Compile(`tags[*] > 10`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("array field type is TypeArray", func(t *testing.T) {
+		schema := NewSchema().AddArrayField("tags", TypeString)
+		field, ok := schema.GetField("tags")
+		assert.True(t, ok)
+		assert.Equal(t, TypeArray, field.Type)
+		assert.Equal(t, TypeString, field.ElemType)
+	})
+}
+
+func TestTypedMapField(t *testing.T) {
+	t.Run("valid index operations on typed map", func(t *testing.T) {
+		schema := NewSchema().
+			AddMapField("headers", TypeString).
+			AddMapField("scores", TypeFloat)
+
+		valid := []string{
+			`headers["x-env"] == "prod"`,
+			`headers["host"] contains "example"`,
+			`headers["ua"] matches "^Mozilla"`,
+			`scores["risk"] > 0.8`,
+			`scores["risk"] >= 0.5`,
+			`scores["risk"] == 1.0`,
+		}
+		for _, expr := range valid {
+			_, err := Compile(expr, schema)
+			assert.NoError(t, err, "should be valid: %s", expr)
+		}
+	})
+
+	t.Run("invalid index operations on typed map", func(t *testing.T) {
+		schema := NewSchema().
+			AddMapField("headers", TypeString).
+			AddMapField("scores", TypeFloat)
+
+		invalid := []string{
+			`headers["x-env"] > 10`,
+			`headers["host"] >= 5`,
+			`scores["risk"] contains "x"`,
+			`scores["risk"] matches "^[0-9]+"`,
+		}
+		for _, expr := range invalid {
+			_, err := Compile(expr, schema)
+			assert.Error(t, err, "should be invalid: %s", expr)
+			assert.Contains(t, err.Error(), "not valid for field type")
+		}
+	})
+
+	t.Run("untyped map still skips value validation", func(t *testing.T) {
+		schema := NewSchema().AddField("data", TypeMap)
+		_, err := Compile(`data["key"] > 10`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("map field type is TypeMap", func(t *testing.T) {
+		schema := NewSchema().AddMapField("headers", TypeString)
+		field, ok := schema.GetField("headers")
+		assert.True(t, ok)
+		assert.Equal(t, TypeMap, field.Type)
+		assert.Equal(t, TypeString, field.ElemType)
+	})
+}
+
+func TestTypedFieldsCombined(t *testing.T) {
+	t.Run("mixed typed and untyped fields", func(t *testing.T) {
+		schema := NewSchema().
+			AddField("name", TypeString).
+			AddArrayField("tags", TypeString).
+			AddArrayField("ports", TypeInt).
+			AddMapField("headers", TypeString).
+			AddMapField("scores", TypeFloat).
+			AddField("data", TypeMap)
+
+		valid := []string{
+			`name == "test" and tags[*] contains "prod"`,
+			`ports[*] >= 1024 and headers["host"] == "example.com"`,
+			`scores["risk"] > 0.5 or name contains "admin"`,
+			`data["key"] > 10`,
+		}
+		for _, expr := range valid {
+			_, err := Compile(expr, schema)
+			assert.NoError(t, err, "should be valid: %s", expr)
+		}
+
+		invalid := []string{
+			`tags[*] > 10 and name == "test"`,
+			`scores["risk"] contains "x"`,
+		}
+		for _, expr := range invalid {
+			_, err := Compile(expr, schema)
+			assert.Error(t, err, "should be invalid: %s", expr)
+		}
+	})
+
+	t.Run("export includes typed fields", func(t *testing.T) {
+		schema := NewSchema().
+			AddArrayField("tags", TypeString).
+			AddMapField("headers", TypeString)
+
+		exported := schema.Export()
+		assert.Equal(t, TypeArray, exported["tags"])
+		assert.Equal(t, TypeMap, exported["headers"])
+	})
+}
+
+func TestFunctionReturnTypeInference(t *testing.T) {
+	schema := NewSchema().
+		AddMapField("user", TypeString).
+		RegisterFunction("get_score", TypeFloat, []Type{TypeString}).
+		RegisterFunction("get_name", TypeString, []Type{TypeString})
+
+	t.Run("valid operations on function return type", func(t *testing.T) {
+		valid := []string{
+			`get_score(user["email"]) > 0.5`,
+			`get_score(user["email"]) >= 0.0`,
+			`get_score(user["email"]) == 1.0`,
+			`get_score(user["email"]) in {0.5, 1.0}`,
+			`get_name(user["email"]) == "admin"`,
+			`get_name(user["email"]) contains "admin"`,
+			`get_name(user["email"]) matches "^admin"`,
+		}
+		for _, expr := range valid {
+			_, err := Compile(expr, schema)
+			assert.NoError(t, err, "should be valid: %s", expr)
+		}
+	})
+
+	t.Run("invalid operations on function return type", func(t *testing.T) {
+		invalid := []string{
+			`get_score(user["email"]) contains "x"`,
+			`get_score(user["email"]) matches "^[0-9]"`,
+			`get_name(user["email"]) > 5`,
+			`get_name(user["email"]) >= 0`,
+		}
+		for _, expr := range invalid {
+			_, err := Compile(expr, schema)
+			assert.Error(t, err, "should be invalid: %s", expr)
+			assert.Contains(t, err.Error(), "not valid for field type")
+		}
+	})
+
+	t.Run("unregistered function skips validation", func(t *testing.T) {
+		_, err := Compile(`unknown_func() > 5`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("full chain inference", func(t *testing.T) {
+		_, err := Compile(`get_score(user["email"]) > 0.5 and get_name(user["email"]) contains "admin"`, schema)
+		assert.NoError(t, err)
+	})
+}
+
+func TestSchemaTimeAndDuration(t *testing.T) {
+	schema := NewSchema().
+		AddField("created_at", TypeTime).
+		AddField("ttl", TypeDuration).
+		AddField("name", TypeString)
+
+	t.Run("valid time operators", func(t *testing.T) {
+		tests := []string{
+			`created_at == 2026-03-19T10:00:00Z`,
+			`created_at != 2026-03-19T10:00:00Z`,
+			`created_at < 2026-03-19T10:00:00Z`,
+			`created_at > 2026-03-19T10:00:00Z`,
+			`created_at <= 2026-03-19T10:00:00Z`,
+			`created_at >= 2026-03-19T10:00:00Z`,
+			`created_at + 1h >= 2026-03-19T10:00:00Z`,
+			`created_at - 1h <= 2026-03-19T10:00:00Z`,
+		}
+		for _, expr := range tests {
+			_, err := Compile(expr, schema)
+			assert.NoError(t, err, "expression: %s", expr)
+		}
+	})
+
+	t.Run("invalid time operators", func(t *testing.T) {
+		tests := []string{
+			`created_at contains "test"`,
+			`created_at matches "pattern"`,
+			`created_at * 2`,
+		}
+		for _, expr := range tests {
+			_, err := Compile(expr, schema)
+			assert.Error(t, err, "expression: %s", expr)
+		}
+	})
+
+	t.Run("valid duration operators", func(t *testing.T) {
+		tests := []string{
+			`ttl == 30m`,
+			`ttl != 30m`,
+			`ttl < 1h`,
+			`ttl > 5m`,
+			`ttl <= 1h`,
+			`ttl >= 5m`,
+			`ttl + 30m > 1h`,
+			`ttl - 5m < 1h`,
+			`ttl * 2 > 1h`,
+			`ttl / 2 < 1h`,
+			`ttl % 1h == 30m`,
+		}
+		for _, expr := range tests {
+			_, err := Compile(expr, schema)
+			assert.NoError(t, err, "expression: %s", expr)
+		}
+	})
+
+	t.Run("invalid duration operators", func(t *testing.T) {
+		tests := []string{
+			`ttl contains "test"`,
+			`ttl matches "pattern"`,
+		}
+		for _, expr := range tests {
+			_, err := Compile(expr, schema)
+			assert.Error(t, err, "expression: %s", expr)
+		}
+	})
+
+	t.Run("now resolves to TypeTime", func(t *testing.T) {
+		_, err := Compile(`created_at >= now() - 1h`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("time in set", func(t *testing.T) {
+		_, err := Compile(`created_at in {2026-03-19T10:00:00Z, 2026-03-20T10:00:00Z}`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("duration in set", func(t *testing.T) {
+		_, err := Compile(`ttl in {30m, 1h, 2h}`, schema)
+		assert.NoError(t, err)
+	})
+}

@@ -1276,3 +1276,98 @@ func TestFilterLookupTable(t *testing.T) {
 		assert.Equal(t, r1, r2)
 	})
 }
+
+func TestContextTimeAndDuration(t *testing.T) {
+	t.Run("SetTimeField", func(t *testing.T) {
+		now := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+		ctx := NewExecutionContext().SetTimeField("ts", now)
+		val, ok := ctx.GetField("ts")
+		assert.True(t, ok)
+		assert.Equal(t, TypeTime, val.Type())
+		assert.True(t, now.Equal(val.(TimeValue).Time))
+	})
+
+	t.Run("SetDurationField", func(t *testing.T) {
+		ctx := NewExecutionContext().SetDurationField("ttl", 30*time.Minute)
+		val, ok := ctx.GetField("ttl")
+		assert.True(t, ok)
+		assert.Equal(t, TypeDuration, val.Type())
+		assert.Equal(t, DurationValue(30*time.Minute), val)
+	})
+
+	t.Run("WithNow", func(t *testing.T) {
+		fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		ctx := NewExecutionContext().WithNow(func() time.Time { return fixed })
+		assert.True(t, fixed.Equal(ctx.now()))
+	})
+
+	t.Run("now defaults to UTC", func(t *testing.T) {
+		ctx := NewExecutionContext()
+		before := time.Now().UTC()
+		result := ctx.now()
+		after := time.Now().UTC()
+		assert.False(t, result.Before(before))
+		assert.False(t, result.After(after))
+	})
+
+	t.Run("export time field", func(t *testing.T) {
+		now := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+		ctx := NewExecutionContext().SetTimeField("ts", now)
+		exported := ctx.Export()
+		assert.Equal(t, "2026-03-19T10:00:00Z", exported["ts"])
+	})
+
+	t.Run("export duration field", func(t *testing.T) {
+		ctx := NewExecutionContext().SetDurationField("ttl", 7*24*time.Hour+12*time.Hour)
+		exported := ctx.Export()
+		assert.Equal(t, "7d12h", exported["ttl"])
+	})
+}
+
+func TestNowFunction(t *testing.T) {
+	schema := NewSchema().AddField("created_at", TypeTime)
+	fixed := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+
+	t.Run("now with injected clock", func(t *testing.T) {
+		filter, err := Compile(`created_at <= now()`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 9, 0, 0, 0, time.UTC)).
+			WithNow(func() time.Time { return fixed })
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("now in arithmetic", func(t *testing.T) {
+		filter, err := Compile(`created_at >= now() - 1h`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 9, 30, 0, 0, time.UTC)).
+			WithNow(func() time.Time { return fixed })
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("now with default clock", func(t *testing.T) {
+		filter, err := Compile(`created_at <= now()`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("future time vs now", func(t *testing.T) {
+		filter, err := Compile(`created_at > now()`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)).
+			WithNow(func() time.Time { return fixed })
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+}

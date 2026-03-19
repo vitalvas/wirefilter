@@ -6,6 +6,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"time"
 )
 
 func (f *Filter) evaluateArrayExpr(expr *ArrayExpr, ctx *ExecutionContext) (Value, error) {
@@ -18,6 +19,9 @@ func (f *Filter) evaluateArrayExpr(expr *ArrayExpr, ctx *ExecutionContext) (Valu
 			}
 			if arr, ok := rangeVals.(ArrayValue); ok {
 				values = append(values, arr...)
+			} else if rangeVals != nil {
+				// IntervalValue or other non-array range result
+				values = append(values, rangeVals)
 			}
 		} else {
 			val, err := f.evaluate(elem, ctx)
@@ -41,7 +45,19 @@ func (f *Filter) evaluateRangeExpr(expr *RangeExpr, ctx *ExecutionContext) (Valu
 		return nil, err
 	}
 
-	if start == nil || end == nil || start.Type() != TypeInt || end.Type() != TypeInt {
+	if start == nil || end == nil {
+		return ArrayValue([]Value{}), nil
+	}
+
+	// Time/duration ranges produce IntervalValue instead of materialized arrays
+	if start.Type() == TypeTime && end.Type() == TypeTime {
+		return IntervalValue{Start: start, End: end}, nil
+	}
+	if start.Type() == TypeDuration && end.Type() == TypeDuration {
+		return IntervalValue{Start: start, End: end}, nil
+	}
+
+	if start.Type() != TypeInt || end.Type() != TypeInt {
 		return ArrayValue([]Value{}), nil
 	}
 
@@ -350,6 +366,18 @@ func (f *Filter) evaluateEquality(left, right Value) (Value, error) {
 			return BoolValue(false), nil
 		}
 		left = CIDRValue{IPNet: ipNet}
+	case left.Type() == TypeTime && right.Type() == TypeString:
+		t, err := time.Parse(time.RFC3339Nano, string(right.(StringValue)))
+		if err != nil {
+			return BoolValue(false), nil
+		}
+		right = TimeValue{Time: t}
+	case left.Type() == TypeString && right.Type() == TypeTime:
+		t, err := time.Parse(time.RFC3339Nano, string(left.(StringValue)))
+		if err != nil {
+			return BoolValue(false), nil
+		}
+		left = TimeValue{Time: t}
 	}
 	return BoolValue(left.Equal(right)), nil
 }
@@ -357,6 +385,17 @@ func (f *Filter) evaluateEquality(left, right Value) (Value, error) {
 func (f *Filter) evaluateComparison(left, right Value, cmp func(int64, int64) bool) (Value, error) {
 	if left == nil || right == nil {
 		return BoolValue(false), nil
+	}
+
+	// Time vs time comparison
+	if left.Type() == TypeTime && right.Type() == TypeTime {
+		diff := left.(TimeValue).Time.Sub(right.(TimeValue).Time)
+		return BoolValue(cmp(int64(diff), 0)), nil
+	}
+
+	// Duration vs duration comparison
+	if left.Type() == TypeDuration && right.Type() == TypeDuration {
+		return BoolValue(cmp(int64(left.(DurationValue)), int64(right.(DurationValue)))), nil
 	}
 
 	// Handle Float and mixed Int/Float comparisons
@@ -390,6 +429,11 @@ func toFloat64(v Value) (float64, bool) {
 func (f *Filter) evaluateArithmetic(left, right Value, op TokenType) (Value, error) {
 	if left == nil || right == nil {
 		return nil, nil
+	}
+
+	// Temporal arithmetic
+	if result, ok := f.evaluateTemporalArithmetic(left, right, op); ok {
+		return result, nil
 	}
 
 	// If either operand is a float, do float arithmetic
@@ -446,6 +490,111 @@ func (f *Filter) evaluateArithmetic(left, right Value, op TokenType) (Value, err
 		return IntValue(li % ri), nil
 	}
 	return nil, nil
+}
+
+// evaluateTemporalArithmetic handles arithmetic involving time and duration values.
+// Returns (result, true) if temporal arithmetic was applied, (nil, false) otherwise.
+func (f *Filter) evaluateTemporalArithmetic(left, right Value, op TokenType) (Value, bool) {
+	lt, rt := left.Type(), right.Type()
+
+	// time +/- duration = time
+	if lt == TypeTime && rt == TypeDuration {
+		return evalTimeAndDuration(left.(TimeValue), right.(DurationValue), op)
+	}
+
+	// duration + time = time (commutative addition only)
+	if lt == TypeDuration && rt == TypeTime && op == TokenPlus {
+		d := time.Duration(left.(DurationValue))
+		return TimeValue{Time: right.(TimeValue).Time.Add(d)}, true
+	}
+
+	// time - time = duration
+	if lt == TypeTime && rt == TypeTime && op == TokenMinus {
+		return DurationValue(left.(TimeValue).Time.Sub(right.(TimeValue).Time)), true
+	}
+
+	// duration op duration
+	if lt == TypeDuration && rt == TypeDuration {
+		return evalDurationAndDuration(left.(DurationValue), right.(DurationValue), op)
+	}
+
+	// duration * scalar or scalar * duration
+	if op == TokenAsterisk {
+		return evalDurationMultiply(left, right, lt, rt)
+	}
+
+	// duration / scalar
+	if lt == TypeDuration && (rt == TypeInt || rt == TypeFloat) && op == TokenDiv {
+		return evalDurationDivScalar(left.(DurationValue), right)
+	}
+
+	return nil, false
+}
+
+func evalTimeAndDuration(tv TimeValue, dv DurationValue, op TokenType) (Value, bool) {
+	d := time.Duration(dv)
+	switch op {
+	case TokenPlus:
+		return TimeValue{Time: tv.Time.Add(d)}, true
+	case TokenMinus:
+		return TimeValue{Time: tv.Time.Add(-d)}, true
+	}
+	return nil, true
+}
+
+func evalDurationAndDuration(left, right DurationValue, op TokenType) (Value, bool) {
+	ld, rd := time.Duration(left), time.Duration(right)
+	switch op {
+	case TokenPlus:
+		return DurationValue(ld + rd), true
+	case TokenMinus:
+		return DurationValue(ld - rd), true
+	case TokenDiv:
+		if rd == 0 {
+			return nil, true
+		}
+		return IntValue(ld / rd), true
+	case TokenMod:
+		if rd == 0 {
+			return nil, true
+		}
+		return DurationValue(ld % rd), true
+	}
+	return nil, false
+}
+
+func evalDurationMultiply(left, right Value, lt, rt Type) (Value, bool) {
+	if lt == TypeDuration && (rt == TypeInt || rt == TypeFloat) {
+		d := time.Duration(left.(DurationValue))
+		if rt == TypeInt {
+			return DurationValue(d * time.Duration(int64(right.(IntValue)))), true
+		}
+		return DurationValue(time.Duration(float64(d) * float64(right.(FloatValue)))), true
+	}
+	if (lt == TypeInt || lt == TypeFloat) && rt == TypeDuration {
+		d := time.Duration(right.(DurationValue))
+		if lt == TypeInt {
+			return DurationValue(d * time.Duration(int64(left.(IntValue)))), true
+		}
+		return DurationValue(time.Duration(float64(d) * float64(left.(FloatValue)))), true
+	}
+	return nil, false
+}
+
+func evalDurationDivScalar(dv DurationValue, right Value) (Value, bool) {
+	d := time.Duration(dv)
+	if right.Type() == TypeInt {
+		ri := int64(right.(IntValue))
+		if ri == 0 {
+			return nil, true
+		}
+		return DurationValue(d / time.Duration(ri)), true
+	}
+	rf := float64(right.(FloatValue))
+	if rf == 0 {
+		return nil, true
+	}
+	return DurationValue(time.Duration(float64(d) / rf)), true
 }
 
 // floatSign returns -1, 0, or 1 as an int64 based on the sign of f.
@@ -533,6 +682,11 @@ func (f *Filter) evaluateIn(left, right Value) (Value, error) {
 		return BoolValue(cidrVal.Contains(ipVal.IP)), nil
 	}
 
+	// Handle IntervalValue: value in interval (range membership)
+	if iv, ok := right.(IntervalValue); ok {
+		return BoolValue(iv.Contains(left)), nil
+	}
+
 	if right.Type() == TypeArray {
 		rightArr := right.(ArrayValue)
 
@@ -567,7 +721,15 @@ func (f *Filter) evaluateIn(left, right Value) (Value, error) {
 			}
 			return BoolValue(false), nil
 		}
-		// Single value in Array
+		// Single value in Array (check for IntervalValue elements)
+		for _, elem := range rightArr {
+			if iv, ok := elem.(IntervalValue); ok {
+				if iv.Contains(left) {
+					return BoolValue(true), nil
+				}
+				continue
+			}
+		}
 		return BoolValue(rightArr.Contains(left)), nil
 	}
 

@@ -24,8 +24,10 @@ const (
 
 // Field represents a named field with a specific type in a schema.
 type Field struct {
-	Name string
-	Type Type
+	Name      string
+	Type      Type
+	ElemType  Type // For TypeArray: element type. For TypeMap: value type.
+	ElemTyped bool // True if ElemType was explicitly set via AddArrayField/AddMapField.
 }
 
 // FuncSignature defines the compile-time signature of a user-defined function.
@@ -87,6 +89,19 @@ var operatorsByType = map[Type]map[TokenType]bool{
 	TypeMap: {
 		TokenEq: true, TokenNe: true,
 	},
+	TypeTime: {
+		TokenEq: true, TokenNe: true,
+		TokenLt: true, TokenGt: true, TokenLe: true, TokenGe: true,
+		TokenIn:   true,
+		TokenPlus: true, TokenMinus: true,
+	},
+	TypeDuration: {
+		TokenEq: true, TokenNe: true,
+		TokenLt: true, TokenGt: true, TokenLe: true, TokenGe: true,
+		TokenIn:   true,
+		TokenPlus: true, TokenMinus: true,
+		TokenAsterisk: true, TokenDiv: true, TokenMod: true,
+	},
 }
 
 // NewSchema creates a new schema.
@@ -146,8 +161,19 @@ func (s *Schema) DisableFunctions(names ...string) *Schema {
 
 // IsFunctionAllowed checks if a function is allowed based on the current mode and rules.
 // Function names are case-insensitive.
+// builtinFunctions is the set of built-in functions that are always allowed
+// regardless of function mode settings.
+var builtinFunctions = map[string]bool{
+	"now": true,
+}
+
 func (s *Schema) IsFunctionAllowed(name string) bool {
 	name = strings.ToLower(name)
+
+	// Built-in special functions are always allowed
+	if builtinFunctions[name] {
+		return true
+	}
 
 	// Custom registered functions are always allowed
 	if s.customFuncs != nil {
@@ -212,6 +238,35 @@ func (s *Schema) AddField(name string, fieldType Type) *Schema {
 	s.fields[name] = Field{
 		Name: name,
 		Type: fieldType,
+	}
+	return s
+}
+
+// AddArrayField adds a typed array field to the schema.
+// The elemType specifies the type of elements in the array,
+// enabling compile-time validation of operations on unpacked elements (e.g., tags[*] > 10).
+// Returns the schema to allow method chaining.
+func (s *Schema) AddArrayField(name string, elemType Type) *Schema {
+	s.fields[name] = Field{
+		Name:      name,
+		Type:      TypeArray,
+		ElemType:  elemType,
+		ElemTyped: true,
+	}
+	return s
+}
+
+// AddMapField adds a typed map field to the schema.
+// The valueType specifies the type of values in the map,
+// enabling compile-time validation of operations on indexed values (e.g., scores["risk"] > 0.8).
+// Map keys are always strings in the wirefilter DSL.
+// Returns the schema to allow method chaining.
+func (s *Schema) AddMapField(name string, valueType Type) *Schema {
+	s.fields[name] = Field{
+		Name:      name,
+		Type:      TypeMap,
+		ElemType:  valueType,
+		ElemTyped: true,
 	}
 	return s
 }
@@ -369,13 +424,41 @@ func (s *Schema) Export() map[string]Type {
 	return result
 }
 
-// resolveFieldType returns the type of a direct field expression.
-// Unpack, index, and function call expressions are skipped since
-// the resulting element type is not known at the schema level.
+// resolveFieldType returns the type of an expression for operator validation.
+// For direct field references, returns the field type.
+// For unpack expressions (field[*]), returns the array element type if known.
+// For index expressions (field["key"]), returns the map value type if known.
+// For function calls, returns the registered return type if known.
 func (v *validator) resolveFieldType(expr Expression) (Type, bool) {
-	if e, ok := expr.(*FieldExpr); ok {
+	switch e := expr.(type) {
+	case *FieldExpr:
 		if field, ok := v.schema.GetField(e.Name); ok {
 			return field.Type, true
+		}
+	case *UnpackExpr:
+		if fieldExpr, ok := e.Array.(*FieldExpr); ok {
+			if field, ok := v.schema.GetField(fieldExpr.Name); ok {
+				if field.Type == TypeArray && field.ElemTyped {
+					return field.ElemType, true
+				}
+			}
+		}
+	case *IndexExpr:
+		if fieldExpr, ok := e.Object.(*FieldExpr); ok {
+			if field, ok := v.schema.GetField(fieldExpr.Name); ok {
+				if field.Type == TypeMap && field.ElemTyped {
+					return field.ElemType, true
+				}
+			}
+		}
+	case *FunctionCallExpr:
+		if strings.ToLower(e.Name) == "now" {
+			return TypeTime, true
+		}
+		if v.schema.customFuncs != nil {
+			if sig, ok := v.schema.customFuncs[strings.ToLower(e.Name)]; ok {
+				return sig.ReturnType, true
+			}
 		}
 	}
 	return 0, false

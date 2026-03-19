@@ -13,7 +13,7 @@ inspired by Cloudflare's Wirefilter.
 - Wildcard matching: `wildcard` (case-insensitive), `strict wildcard` (case-sensitive)
 - Field presence/absence checking
 - Range expressions: `{1..10}`
-- Multiple data types: string, int, float, bool, IP, CIDR, bytes, arrays, maps
+- Multiple data types: string, int, float, bool, IP, CIDR, bytes, arrays, maps, time, duration
 - Map field access with bracket notation
 - Array index access: `tags[0]`
 - Array unpack operations: `tags[*] == "value"` (ANY semantics)
@@ -21,7 +21,8 @@ inspired by Cloudflare's Wirefilter.
 - Custom lists: `$list_name` for external list references
 - Lookup tables: `$table_name[field]` for key-value lookups
 - Negated membership: `not in`, `not contains`
-- Built-in functions: `lower()`, `upper()`, `len()`, `starts_with()`, and more
+- Native time and duration types with temporal arithmetic and `now()` built-in
+- Built-in functions: `lower()`, `upper()`, `len()`, `starts_with()`, `now()`, and more
 - User-defined functions: `maintenance()`, `get_score(domain)`, `is_tor(ip)`
 - Field-to-field comparisons
 - IP/CIDR matching for IPv4 and IPv6
@@ -308,6 +309,44 @@ port in {80..100, 443, 8000..9000}
 http.status in {200..299}
 ```
 
+### Time and Duration Literals
+
+Timestamps use RFC 3339 format, durations use compound `d/h/m/s` notation:
+
+```go
+// Timestamp comparisons
+created_at >= 2026-03-19T10:00:00Z
+expires_at < 2026-12-31T23:59:59+05:00
+
+// Duration comparisons
+ttl >= 30m
+session.timeout < 2d4h30m15s
+
+// Temporal arithmetic
+created_at + 1h >= 2026-03-19T11:00:00Z
+expires_at < now() + 30m
+ttl * 2 > 1h
+ttl / 30m == 2
+
+// Time range membership
+created_at in {2026-03-19T00:00:00Z..2026-03-20T00:00:00Z}
+ttl in {1h..3h}
+
+// String-to-time coercion in equality
+created_at == "2026-03-19T10:00:00Z"
+```
+
+Duration units:
+
+- `d` - days (24 hours)
+- `h` - hours
+- `m` - minutes
+- `s` - seconds
+
+Compound durations combine units: `2d4h30m15s` = 2 days, 4 hours, 30 minutes, 15 seconds.
+
+The `now()` function returns the current time (injectable via `WithNow` for testing).
+
 ### Array Comparison
 
 ```go
@@ -359,6 +398,34 @@ networkFields := map[string]wirefilter.Type{
 
 schema := wirefilter.NewSchema(httpFields, networkFields)
 ```
+
+#### Typed Arrays and Maps
+
+Use `AddArrayField` and `AddMapField` to enable compile-time validation of
+operations on array elements and map values:
+
+```go
+schema := wirefilter.NewSchema().
+    AddArrayField("tags", wirefilter.TypeString).
+    AddArrayField("ports", wirefilter.TypeInt).
+    AddMapField("headers", wirefilter.TypeString).
+    AddMapField("scores", wirefilter.TypeFloat)
+```
+
+With typed fields, the compiler rejects invalid operations at compile time:
+
+```go
+tags[*] == "admin"          // valid: string equality on string array
+tags[*] contains "prod"     // valid: string contains on string array
+tags[*] > 10                // compile error: > not valid for string
+ports[*] >= 1024            // valid: int comparison on int array
+ports[*] contains "x"       // compile error: contains not valid for int
+headers["x-env"] == "prod"  // valid: string equality on string map
+scores["risk"] > 0.8        // valid: float comparison on float map
+scores["risk"] contains "x" // compile error: contains not valid for float
+```
+
+Untyped `AddField("tags", TypeArray)` still works but skips element-level validation.
 
 ### Controlling Function Availability
 
@@ -436,9 +503,30 @@ Type validation rules:
 | Array | `==`, `!=`, `===`, `!==`, `contains`, `in` |
 | Map | `==`, `!=` |
 | Bytes | `==`, `!=`, `contains` |
+| Time | `==`, `!=`, `<`, `>`, `<=`, `>=`, `in`, `+`, `-` |
+| Duration | `==`, `!=`, `<`, `>`, `<=`, `>=`, `in`, `+`, `-`, `*`, `/`, `%` |
 
-Expressions using `[*]` (unpack), `["key"]` (index), or functions skip type
-validation since the resulting element type is not known at compile time.
+The compiler infers types through compound expressions and validates operators
+at each level:
+
+- **Array unpack** (`field[*]`): inferred from `AddArrayField` element type
+- **Map index** (`field["key"]`): inferred from `AddMapField` value type
+- **Function calls**: inferred from `RegisterFunction` return type
+
+```go
+schema := wirefilter.NewSchema().
+    AddArrayField("ports", wirefilter.TypeInt).
+    AddMapField("user", wirefilter.TypeString).
+    RegisterFunction("get_score", wirefilter.TypeFloat, []wirefilter.Type{wirefilter.TypeString})
+
+ports[*] > 1000                         // valid: int comparison
+ports[*] contains "x"                   // compile error: contains not valid for int
+user["role"] > 5                        // compile error: > not valid for string
+get_score(user["email"]) > 0.5          // valid: full chain inferred
+get_score(user["email"]) contains "x"   // compile error: contains not valid for float
+```
+
+Untyped fields (`AddField`) and unregistered functions skip type validation.
 
 ### Expression Complexity Limits
 
@@ -531,6 +619,25 @@ For float fields:
 ```go
 ctx := wirefilter.NewExecutionContext().
     SetFloatField("score", 3.14)
+```
+
+#### Setting Time and Duration Fields
+
+```go
+ctx := wirefilter.NewExecutionContext().
+    SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)).
+    SetDurationField("ttl", 30*time.Minute)
+```
+
+#### Injecting a Clock for now()
+
+By default, `now()` returns the current UTC time. Use `WithNow` to inject a fixed clock for deterministic testing:
+
+```go
+fixed := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+ctx := wirefilter.NewExecutionContext().
+    WithNow(func() time.Time { return fixed }).
+    SetTimeField("expires_at", fixed.Add(time.Hour))
 ```
 
 For map fields where each key maps to an array of values (e.g., HTTP headers):
@@ -812,6 +919,8 @@ exported := ctx.ExportLists()
 | `TypeBytes` | Byte arrays | `[]byte("data")` |
 | `TypeArray` | Arrays of values | `{1, 2, 3}` |
 | `TypeMap` | Map of string keys to values | `{"key": "value"}` |
+| `TypeTime` | RFC 3339 timestamps | `2026-03-19T10:00:00Z` |
+| `TypeDuration` | Duration values | `30m`, `7d`, `1h30m` |
 
 ## Operators
 
@@ -867,8 +976,24 @@ Wildcard patterns support:
 | `/` | Division (nil on zero) | `x / 3` |
 | `%` | Modulo (nil on zero) | `x % 2` |
 
-Arithmetic works on Int and Float types. Mixed Int/Float produces Float results.
+Arithmetic works on Int, Float, Time, and Duration types. Mixed Int/Float produces Float results.
 Standard precedence: `*`, `/`, `%` bind tighter than `+`, `-`.
+
+Temporal arithmetic rules:
+
+| Expression | Result Type | Example |
+|-----------|------------|---------|
+| `time + duration` | Time | `created_at + 1h` |
+| `time - duration` | Time | `expires_at - 30m` |
+| `duration + time` | Time | `1h + created_at` |
+| `time - time` | Duration | `end - start` |
+| `duration + duration` | Duration | `ttl + 30m` |
+| `duration - duration` | Duration | `ttl - 5m` |
+| `duration * int/float` | Duration | `ttl * 2` |
+| `int/float * duration` | Duration | `2 * ttl` |
+| `duration / int/float` | Duration | `ttl / 2` |
+| `duration / duration` | Int | `ttl / 30m` |
+| `duration % duration` | Duration | `ttl % 1h` |
 
 ### Array Operators
 
@@ -934,6 +1059,15 @@ Wirefilter provides built-in functions for transforming and inspecting values.
 | `is_ipv4(IP)` | Check if IPv4 | `is_ipv4(ip)` |
 | `is_ipv6(IP)` | Check if IPv6 | `is_ipv6(ip)` |
 | `is_loopback(IP)` | Check if loopback | `is_loopback(ip)` |
+
+### Time Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `now()` | Current time (injectable clock) | `created_at >= now() - 1h` |
+
+The `now()` function is always available regardless of function mode settings.
+Use `WithNow` on the execution context to inject a fixed clock for testing.
 
 ### Math Functions
 
@@ -1190,6 +1324,33 @@ ctx := wirefilter.NewExecutionContext().
     SetIPList("blocked_ips", []string{"192.168.1.1", "10.0.0.100"})
 
 matched, _ := filter.Execute(ctx) // true (admin is privileged, IP not blocked)
+```
+
+### Time-based Filtering
+
+```go
+schema := wirefilter.NewSchema().
+    AddField("created_at", wirefilter.TypeTime).
+    AddField("ttl", wirefilter.TypeDuration).
+    AddField("status", wirefilter.TypeString)
+
+// Filter for recently created active items with sufficient TTL
+expression := `
+    created_at >= now() - 1h and
+    ttl > 30m and
+    status == "active"
+`
+
+filter, _ := wirefilter.Compile(expression, schema)
+
+fixed := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+ctx := wirefilter.NewExecutionContext().
+    WithNow(func() time.Time { return fixed }).
+    SetTimeField("created_at", fixed.Add(-30*time.Minute)).
+    SetDurationField("ttl", 2*time.Hour).
+    SetStringField("status", "active")
+
+matched, _ := filter.Execute(ctx) // true
 ```
 
 ### Raw Strings for Complex Patterns

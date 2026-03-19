@@ -2,6 +2,7 @@ package wirefilter
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -829,6 +830,116 @@ func TestLexerCIDRAndIPParsing(t *testing.T) {
 		lexer := NewLexer(`ip == fe80::1`)
 		lexer.NextToken() // ip
 		lexer.NextToken() // ==
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenIP, tok.Type)
+	})
+}
+
+func TestLexerTimestampAndDuration(t *testing.T) {
+	t.Run("RFC 3339 timestamp", func(t *testing.T) {
+		lexer := NewLexer(`2026-03-19T10:00:00Z`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenTime, tok.Type)
+		assert.Equal(t, "2026-03-19T10:00:00Z", tok.Literal)
+		expected := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+		assert.True(t, expected.Equal(tok.Value.(time.Time)))
+	})
+
+	t.Run("RFC 3339 timestamp with fractional seconds", func(t *testing.T) {
+		lexer := NewLexer(`2026-03-19T10:00:00.123456789Z`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenTime, tok.Type)
+		expected := time.Date(2026, 3, 19, 10, 0, 0, 123456789, time.UTC)
+		assert.True(t, expected.Equal(tok.Value.(time.Time)))
+	})
+
+	t.Run("RFC 3339 timestamp with timezone offset", func(t *testing.T) {
+		lexer := NewLexer(`2026-03-19T10:00:00+05:00`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenTime, tok.Type)
+		expected := time.Date(2026, 3, 19, 5, 0, 0, 0, time.UTC)
+		assert.True(t, expected.Equal(tok.Value.(time.Time)))
+	})
+
+	t.Run("simple duration 30m", func(t *testing.T) {
+		lexer := NewLexer(`30m`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenDuration, tok.Type)
+		assert.Equal(t, "30m", tok.Literal)
+		assert.Equal(t, 30*time.Minute, tok.Value.(time.Duration))
+	})
+
+	t.Run("duration 7d", func(t *testing.T) {
+		lexer := NewLexer(`7d`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenDuration, tok.Type)
+		assert.Equal(t, 7*24*time.Hour, tok.Value.(time.Duration))
+	})
+
+	t.Run("compound duration 1h30m", func(t *testing.T) {
+		lexer := NewLexer(`1h30m`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenDuration, tok.Type)
+		assert.Equal(t, "1h30m", tok.Literal)
+		assert.Equal(t, time.Hour+30*time.Minute, tok.Value.(time.Duration))
+	})
+
+	t.Run("compound duration 2d4h30m15s", func(t *testing.T) {
+		lexer := NewLexer(`2d4h30m15s`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenDuration, tok.Type)
+		expected := 2*24*time.Hour + 4*time.Hour + 30*time.Minute + 15*time.Second
+		assert.Equal(t, expected, tok.Value.(time.Duration))
+	})
+
+	t.Run("duration in expression", func(t *testing.T) {
+		lexer := NewLexer(`ttl >= 30m`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenIdent, tok.Type)
+		assert.Equal(t, "ttl", tok.Literal)
+
+		tok = lexer.NextToken()
+		assert.Equal(t, TokenGe, tok.Type)
+
+		tok = lexer.NextToken()
+		assert.Equal(t, TokenDuration, tok.Type)
+		assert.Equal(t, 30*time.Minute, tok.Value.(time.Duration))
+	})
+
+	t.Run("timestamp in expression", func(t *testing.T) {
+		lexer := NewLexer(`created_at >= 2026-03-19T10:00:00Z`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenIdent, tok.Type)
+
+		tok = lexer.NextToken()
+		assert.Equal(t, TokenGe, tok.Type)
+
+		tok = lexer.NextToken()
+		assert.Equal(t, TokenTime, tok.Type)
+	})
+
+	t.Run("invalid timestamp", func(t *testing.T) {
+		lexer := NewLexer(`2026-13-19T99:00:00Z`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenError, tok.Type)
+	})
+
+	t.Run("duration 5s", func(t *testing.T) {
+		lexer := NewLexer(`5s`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenDuration, tok.Type)
+		assert.Equal(t, 5*time.Second, tok.Value.(time.Duration))
+	})
+
+	t.Run("integer not confused with duration", func(t *testing.T) {
+		lexer := NewLexer(`42`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenInt, tok.Type)
+		assert.Equal(t, int64(42), tok.Value)
+	})
+
+	t.Run("IP not confused with timestamp", func(t *testing.T) {
+		lexer := NewLexer(`192.168.0.1`)
 		tok := lexer.NextToken()
 		assert.Equal(t, TokenIP, tok.Type)
 	})

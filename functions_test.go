@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1934,5 +1935,71 @@ func TestFunctionEdgeCases(t *testing.T) {
 		ctx := NewExecutionContext().WithContext(goCtx).SetStringField("name", "x")
 		_, err = filter.Execute(ctx)
 		assert.Error(t, err)
+	})
+}
+
+func TestNowBuiltinFunction(t *testing.T) {
+	schema := NewSchema().AddField("ts", TypeTime)
+
+	t.Run("now returns injected time", func(t *testing.T) {
+		fixed := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+		filter, err := Compile(`ts == now()`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetTimeField("ts", fixed).
+			WithNow(func() time.Time { return fixed })
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("now in comparison", func(t *testing.T) {
+		fixed := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+		filter, err := Compile(`ts < now()`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetTimeField("ts", fixed.Add(-time.Hour)).
+			WithNow(func() time.Time { return fixed })
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("now plus duration", func(t *testing.T) {
+		fixed := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+		filter, err := Compile(`ts < now() + 30m`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetTimeField("ts", fixed.Add(15*time.Minute)).
+			WithNow(func() time.Time { return fixed })
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("now minus duration", func(t *testing.T) {
+		fixed := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+		filter, err := Compile(`ts >= now() - 1h`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetTimeField("ts", fixed.Add(-30*time.Minute)).
+			WithNow(func() time.Time { return fixed })
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("now is function-mode aware", func(t *testing.T) {
+		schema := NewSchema().
+			AddField("ts", TypeTime).
+			SetFunctionMode(FunctionModeAllowlist)
+
+		// now should still work even in allowlist mode (built-in)
+		_, err := Compile(`ts < now()`, schema)
+		assert.NoError(t, err)
 	})
 }

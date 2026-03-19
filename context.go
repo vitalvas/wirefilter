@@ -33,6 +33,8 @@ type ExecutionContext struct {
 	tables map[string]MapValue
 	funcs  map[string]FuncHandler
 
+	nowFunc func() time.Time // injectable clock for now()
+
 	// Evaluation options
 	goCtx        context.Context  // cancellation/timeout
 	traceRoot    *TraceNode       // trace tree root
@@ -104,6 +106,36 @@ func (ctx *ExecutionContext) SetIPField(name string, value string) *ExecutionCon
 func (ctx *ExecutionContext) SetBytesField(name string, value []byte) *ExecutionContext {
 	ctx.fields[name] = BytesValue(value)
 	return ctx
+}
+
+// SetTimeField sets a time field value in the execution context.
+// Returns the context to allow method chaining.
+func (ctx *ExecutionContext) SetTimeField(name string, value time.Time) *ExecutionContext {
+	ctx.fields[name] = TimeValue{Time: value.UTC()}
+	return ctx
+}
+
+// SetDurationField sets a duration field value in the execution context.
+// Returns the context to allow method chaining.
+func (ctx *ExecutionContext) SetDurationField(name string, value time.Duration) *ExecutionContext {
+	ctx.fields[name] = DurationValue(value)
+	return ctx
+}
+
+// WithNow sets an injectable clock function for the now() built-in.
+// If not set, now() returns time.Now().UTC().
+// Returns the context to allow method chaining.
+func (ctx *ExecutionContext) WithNow(fn func() time.Time) *ExecutionContext {
+	ctx.nowFunc = fn
+	return ctx
+}
+
+// now returns the current time from the injectable clock or time.Now().UTC().
+func (ctx *ExecutionContext) now() time.Time {
+	if ctx.nowFunc != nil {
+		return ctx.nowFunc()
+	}
+	return time.Now().UTC()
 }
 
 // SetMapField sets a map field value in the execution context.
@@ -454,6 +486,10 @@ func exportValue(v Value) any {
 		return val.IPNet.String()
 	case BytesValue:
 		return string(val)
+	case TimeValue:
+		return val.Time.Format(time.RFC3339Nano)
+	case DurationValue:
+		return val.String()
 	case ArrayValue:
 		items := make([]any, len(val))
 		for i, elem := range val {

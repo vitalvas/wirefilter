@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -877,5 +878,89 @@ func FuzzMarshalUnmarshal(f *testing.F) {
 		if filter.Hash() != restored.Hash() {
 			t.Fatalf("hash mismatch for %q", expr)
 		}
+	})
+}
+
+func TestEncodingTimeAndDuration(t *testing.T) {
+	t.Run("time roundtrip", func(t *testing.T) {
+		schema := NewSchema().AddField("ts", TypeTime)
+		filter, err := Compile(`ts >= 2026-03-19T10:00:00Z`, schema)
+		require.NoError(t, err)
+
+		data, err := filter.MarshalBinary()
+		require.NoError(t, err)
+
+		restored := &Filter{}
+		err = restored.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+		ctx := NewExecutionContext().SetTimeField("ts", now)
+
+		r1, err := filter.Execute(ctx)
+		require.NoError(t, err)
+		r2, err := restored.Execute(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, r1, r2)
+		assert.True(t, r1)
+
+		assert.Equal(t, filter.Hash(), restored.Hash())
+	})
+
+	t.Run("duration roundtrip", func(t *testing.T) {
+		schema := NewSchema().AddField("ttl", TypeDuration)
+		filter, err := Compile(`ttl == 30m`, schema)
+		require.NoError(t, err)
+
+		data, err := filter.MarshalBinary()
+		require.NoError(t, err)
+
+		restored := &Filter{}
+		err = restored.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().SetDurationField("ttl", 30*time.Minute)
+
+		r1, err := filter.Execute(ctx)
+		require.NoError(t, err)
+		r2, err := restored.Execute(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, r1, r2)
+		assert.True(t, r1)
+
+		assert.Equal(t, filter.Hash(), restored.Hash())
+	})
+
+	t.Run("time with fractional seconds roundtrip", func(t *testing.T) {
+		filter, err := Compile(`ts >= 2026-03-19T10:00:00.123456789Z`, nil)
+		require.NoError(t, err)
+
+		data, err := filter.MarshalBinary()
+		require.NoError(t, err)
+
+		restored := &Filter{}
+		err = restored.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		assert.Equal(t, filter.Hash(), restored.Hash())
+	})
+
+	t.Run("compound duration roundtrip", func(t *testing.T) {
+		filter, err := Compile(`ttl >= 2d4h30m`, nil)
+		require.NoError(t, err)
+
+		data, err := filter.MarshalBinary()
+		require.NoError(t, err)
+
+		restored := &Filter{}
+		err = restored.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().SetDurationField("ttl", 3*24*time.Hour)
+
+		r1, _ := filter.Execute(ctx)
+		r2, _ := restored.Execute(ctx)
+		assert.Equal(t, r1, r2)
+		assert.True(t, r1)
 	})
 }

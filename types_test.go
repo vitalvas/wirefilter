@@ -4,6 +4,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -689,5 +690,136 @@ func TestMapValueEqual(t *testing.T) {
 		m1 := MapValue{"a": StringValue("1")}
 		m2 := MapValue{"b": StringValue("1")}
 		assert.False(t, m1.Equal(m2))
+	})
+}
+
+func TestTimeValue(t *testing.T) {
+	t1 := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
+
+	t.Run("type", func(t *testing.T) {
+		assert.Equal(t, TypeTime, TimeValue{Time: t1}.Type())
+	})
+
+	t.Run("string", func(t *testing.T) {
+		v := TimeValue{Time: t1}
+		assert.Equal(t, "2026-03-19T10:00:00Z", v.String())
+	})
+
+	t.Run("truthy", func(t *testing.T) {
+		assert.True(t, TimeValue{Time: t1}.IsTruthy())
+	})
+
+	t.Run("equal", func(t *testing.T) {
+		assert.True(t, TimeValue{Time: t1}.Equal(TimeValue{Time: t2}))
+		assert.False(t, TimeValue{Time: t1}.Equal(TimeValue{Time: t3}))
+	})
+
+	t.Run("not equal different type", func(t *testing.T) {
+		assert.False(t, TimeValue{Time: t1}.Equal(StringValue("test")))
+	})
+
+	t.Run("type string", func(t *testing.T) {
+		assert.Equal(t, "time", TypeTime.String())
+	})
+}
+
+func TestDurationValue(t *testing.T) {
+	t.Run("type", func(t *testing.T) {
+		assert.Equal(t, TypeDuration, DurationValue(time.Hour).Type())
+	})
+
+	t.Run("string with days", func(t *testing.T) {
+		d := DurationValue(7*24*time.Hour + 12*time.Hour + 30*time.Minute)
+		assert.Equal(t, "7d12h30m", d.String())
+	})
+
+	t.Run("string simple", func(t *testing.T) {
+		assert.Equal(t, "30m", DurationValue(30*time.Minute).String())
+		assert.Equal(t, "1h", DurationValue(time.Hour).String())
+		assert.Equal(t, "0s", DurationValue(0).String())
+		assert.Equal(t, "5s", DurationValue(5*time.Second).String())
+	})
+
+	t.Run("truthy", func(t *testing.T) {
+		assert.True(t, DurationValue(time.Hour).IsTruthy())
+	})
+
+	t.Run("equal", func(t *testing.T) {
+		d1 := DurationValue(time.Hour)
+		d2 := DurationValue(time.Hour)
+		assert.True(t, d1.Equal(d2))
+		assert.False(t, d1.Equal(DurationValue(time.Minute)))
+	})
+
+	t.Run("not equal different type", func(t *testing.T) {
+		assert.False(t, DurationValue(time.Hour).Equal(IntValue(3600)))
+	})
+
+	t.Run("type string", func(t *testing.T) {
+		assert.Equal(t, "duration", TypeDuration.String())
+	})
+}
+
+func TestIntervalValue(t *testing.T) {
+	t1 := time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC)
+
+	t.Run("time interval contains", func(t *testing.T) {
+		iv := IntervalValue{
+			Start: TimeValue{Time: t1},
+			End:   TimeValue{Time: t2},
+		}
+		mid := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+		before := time.Date(2026, 3, 18, 0, 0, 0, 0, time.UTC)
+		after := time.Date(2026, 3, 21, 0, 0, 0, 0, time.UTC)
+
+		assert.True(t, iv.Contains(TimeValue{Time: mid}))
+		assert.True(t, iv.Contains(TimeValue{Time: t1}))
+		assert.True(t, iv.Contains(TimeValue{Time: t2}))
+		assert.False(t, iv.Contains(TimeValue{Time: before}))
+		assert.False(t, iv.Contains(TimeValue{Time: after}))
+		assert.False(t, iv.Contains(IntValue(42)))
+	})
+
+	t.Run("duration interval contains", func(t *testing.T) {
+		iv := IntervalValue{
+			Start: DurationValue(time.Hour),
+			End:   DurationValue(3 * time.Hour),
+		}
+		assert.True(t, iv.Contains(DurationValue(2*time.Hour)))
+		assert.True(t, iv.Contains(DurationValue(time.Hour)))
+		assert.True(t, iv.Contains(DurationValue(3*time.Hour)))
+		assert.False(t, iv.Contains(DurationValue(30*time.Minute)))
+		assert.False(t, iv.Contains(DurationValue(4*time.Hour)))
+		assert.False(t, iv.Contains(IntValue(42)))
+	})
+
+	t.Run("string", func(t *testing.T) {
+		iv := IntervalValue{
+			Start: DurationValue(time.Hour),
+			End:   DurationValue(2 * time.Hour),
+		}
+		assert.Equal(t, "1h..2h", iv.String())
+	})
+
+	t.Run("equal", func(t *testing.T) {
+		iv1 := IntervalValue{Start: DurationValue(time.Hour), End: DurationValue(2 * time.Hour)}
+		iv2 := IntervalValue{Start: DurationValue(time.Hour), End: DurationValue(2 * time.Hour)}
+		iv3 := IntervalValue{Start: DurationValue(time.Hour), End: DurationValue(3 * time.Hour)}
+		assert.True(t, iv1.Equal(iv2))
+		assert.False(t, iv1.Equal(iv3))
+		assert.False(t, iv1.Equal(IntValue(42)))
+	})
+
+	t.Run("type returns start type", func(t *testing.T) {
+		iv := IntervalValue{Start: DurationValue(time.Hour), End: DurationValue(2 * time.Hour)}
+		assert.Equal(t, TypeDuration, iv.Type())
+	})
+
+	t.Run("truthy", func(t *testing.T) {
+		iv := IntervalValue{Start: DurationValue(time.Hour), End: DurationValue(2 * time.Hour)}
+		assert.True(t, iv.IsTruthy())
 	})
 }

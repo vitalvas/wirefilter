@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Lexer tokenizes filter expression strings into tokens.
@@ -418,21 +419,139 @@ func looksLikeIP(s string) bool {
 	return false
 }
 
-func (l *Lexer) readNumberToken() Token {
-	// Read potential IP/CIDR/Number (digits, dots, colons, slashes, hex for IPv6)
-	start := l.pos - 1
-	if l.ch == '-' {
+// isDurationSuffix checks if a byte is a valid duration unit suffix.
+func isDurationSuffix(ch byte) bool {
+	return ch == 'd' || ch == 'h' || ch == 'm' || ch == 's'
+}
+
+// isTimestampChar checks if a byte is valid within an RFC 3339 timestamp literal.
+func isTimestampChar(ch byte) bool {
+	return isDigit(ch) || ch == '-' || ch == 'T' || ch == 't' ||
+		ch == ':' || ch == 'Z' || ch == 'z' || ch == '+' || ch == '.'
+}
+
+// readTimestampToken reads an RFC 3339 timestamp literal starting from start position.
+// Called when we've read exactly 4 digits followed by '-'.
+func (l *Lexer) readTimestampToken(start int) Token {
+	// Continue reading characters valid in RFC 3339: digits, -, T, t, :, Z, z, +, .
+	// Stop at '..' (range operator)
+	for isTimestampChar(l.ch) && (l.ch != '.' || l.peekChar() != '.') {
+		l.readChar()
+	}
+	literal := l.input[start : l.pos-1]
+
+	t, err := time.Parse(time.RFC3339Nano, literal)
+	if err != nil {
+		return Token{
+			Type:    TokenError,
+			Literal: literal,
+			Value:   fmt.Sprintf("invalid timestamp: %s", literal),
+		}
+	}
+	return Token{
+		Type:    TokenTime,
+		Literal: literal,
+		Value:   t.UTC(),
+	}
+}
+
+// readDurationToken reads a compound duration literal (e.g., 2d4h30m15s).
+// Called when digits followed by a duration suffix are detected.
+// digitsPart is the already-read digits string.
+func (l *Lexer) readDurationToken(start int, digitsPart string) Token {
+	var total time.Duration
+
+	// Process the first group: digitsPart + current suffix
+	num, _ := strconv.ParseInt(digitsPart, 10, 64)
+	suffix := l.ch
+	total += durationFromUnit(num, suffix)
+	l.readChar()
+
+	// Greedily read more [0-9]+[dhms] groups
+	for isDigit(l.ch) {
+		numStart := l.pos - 1
+		for isDigit(l.ch) {
+			l.readChar()
+		}
+		numStr := l.input[numStart : l.pos-1]
+		if !isDurationSuffix(l.ch) {
+			// Not a valid duration continuation - error
+			literal := l.input[start : l.pos-1]
+			return Token{
+				Type:    TokenError,
+				Literal: literal,
+				Value:   fmt.Sprintf("invalid duration: %s", literal),
+			}
+		}
+		n, _ := strconv.ParseInt(numStr, 10, 64)
+		total += durationFromUnit(n, l.ch)
 		l.readChar()
 	}
 
+	literal := l.input[start : l.pos-1]
+	return Token{
+		Type:    TokenDuration,
+		Literal: literal,
+		Value:   total,
+	}
+}
+
+// durationFromUnit converts a numeric value and unit suffix to a time.Duration.
+func durationFromUnit(n int64, unit byte) time.Duration {
+	switch unit {
+	case 'd':
+		return time.Duration(n) * 24 * time.Hour
+	case 'h':
+		return time.Duration(n) * time.Hour
+	case 'm':
+		return time.Duration(n) * time.Minute
+	case 's':
+		return time.Duration(n) * time.Second
+	}
+	return 0
+}
+
+func (l *Lexer) readNumberToken() Token {
+	start := l.pos - 1
+	isNegative := false
+	if l.ch == '-' {
+		isNegative = true
+		l.readChar()
+	}
+
+	// Read initial digit sequence to check for timestamp or duration
+	digitsStart := l.pos - 1
+	for isDigit(l.ch) {
+		l.readChar()
+	}
+	digitsPart := l.input[digitsStart : l.pos-1]
+
+	// Check for RFC 3339 timestamp: exactly 4 digits followed by '-'
+	if !isNegative && len(digitsPart) == 4 && l.ch == '-' {
+		l.readChar()
+		return l.readTimestampToken(start)
+	}
+
+	// Check for duration literal: digits followed by duration suffix
+	if !isNegative && len(digitsPart) > 0 && isDurationSuffix(l.ch) {
+		return l.readDurationToken(start, digitsPart)
+	}
+
+	// Continue reading IP/CIDR/Number characters
+	l.readIPCIDRChars()
+	literal := l.input[start : l.pos-1]
+
+	return l.classifyNumericLiteral(literal)
+}
+
+// readIPCIDRChars consumes characters that could form IP, CIDR, or numeric literals.
+func (l *Lexer) readIPCIDRChars() {
 	hasColon := false
-	// Read all characters that could form IP/CIDR/Number
 	for {
 		if isDigit(l.ch) {
 			l.readChar()
 			continue
 		}
-		// Stop at '..' (range operator) - don't consume second dot
 		if l.ch == '.' && l.peekChar() != '.' {
 			l.readChar()
 			continue
@@ -446,78 +565,59 @@ func (l *Lexer) readNumberToken() Token {
 			l.readChar()
 			continue
 		}
-		// Allow hex characters for IPv6 (only after seeing a colon)
 		if hasColon && isHexChar(l.ch) {
 			l.readChar()
 			continue
 		}
 		break
 	}
-	literal := l.input[start : l.pos-1]
+}
 
-	// Try to parse as CIDR first (contains /)
+// classifyNumericLiteral attempts to parse a literal as CIDR, IP, float, or integer.
+func (l *Lexer) classifyNumericLiteral(literal string) Token {
 	if looksLikeCIDR(literal) {
 		if _, ipNet, err := net.ParseCIDR(literal); err == nil {
-			return Token{
-				Type:    TokenCIDR,
-				Literal: literal,
-				Value:   ipNet,
-			}
+			return Token{Type: TokenCIDR, Literal: literal, Value: ipNet}
 		}
 	}
 
-	// Try to parse as IP (contains . or :)
 	if looksLikeIP(literal) {
 		if ip := NormalizeIP(net.ParseIP(literal)); ip != nil {
-			return Token{
-				Type:    TokenIP,
-				Literal: literal,
-				Value:   ip,
-			}
+			return Token{Type: TokenIP, Literal: literal, Value: ip}
 		}
 	}
 
-	// Try float (contains single dot, no colons/slashes)
 	if strings.Contains(literal, ".") && !strings.Contains(literal, ":") && !strings.Contains(literal, "/") {
 		if fval, err := strconv.ParseFloat(literal, 64); err == nil {
-			return Token{
-				Type:    TokenFloat,
-				Literal: literal,
-				Value:   fval,
-			}
+			return Token{Type: TokenFloat, Literal: literal, Value: fval}
 		}
 	}
 
-	// Fall back to integer
 	val, err := strconv.ParseInt(literal, 10, 64)
 	if err != nil {
-		// Check if it looks like a pure integer (overflow) vs invalid IP
-		isDigitsOnly := true
-		start := 0
-		if len(literal) > 0 && literal[0] == '-' {
-			start = 1
-		}
-		for i := start; i < len(literal); i++ {
-			if !isDigit(literal[i]) {
-				isDigitsOnly = false
-				break
-			}
-		}
-		errMsg := fmt.Sprintf("invalid number or IP: %s", literal)
-		if isDigitsOnly {
-			errMsg = fmt.Sprintf("integer overflow: %s", literal)
-		}
-		return Token{
-			Type:    TokenError,
-			Literal: literal,
-			Value:   errMsg,
+		return l.numericErrorToken(literal)
+	}
+	return Token{Type: TokenInt, Literal: literal, Value: val}
+}
+
+// numericErrorToken creates an error token for an invalid numeric literal.
+func (l *Lexer) numericErrorToken(literal string) Token {
+	isDigitsOnly := true
+	startIdx := 0
+	if len(literal) > 0 && literal[0] == '-' {
+		startIdx = 1
+	}
+	for i := startIdx; i < len(literal); i++ {
+		if !isDigit(literal[i]) {
+			isDigitsOnly = false
+			break
 		}
 	}
-	return Token{
-		Type:    TokenInt,
-		Literal: literal,
-		Value:   val,
+	errMsg := fmt.Sprintf("invalid number or IP: %s", literal)
+	if isDigitsOnly {
+		errMsg = fmt.Sprintf("integer overflow: %s", literal)
 	}
+	return Token{Type: TokenError, Literal: literal, Value: errMsg}
 }
 
 // Error creates a formatted error with the current lexer position.

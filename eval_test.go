@@ -6,6 +6,7 @@ import (
 	"net"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3727,5 +3728,280 @@ func TestEvalErrorPropagation(t *testing.T) {
 		ctx := NewExecutionContext().SetIntField("x", 5)
 		result, _ := filter.Execute(ctx)
 		assert.True(t, result)
+	})
+}
+
+func TestTimeComparison(t *testing.T) {
+	schema := NewSchema().AddField("created_at", TypeTime)
+	now := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name   string
+		expr   string
+		time   time.Time
+		result bool
+	}{
+		{"equal", `created_at == 2026-03-19T10:00:00Z`, now, true},
+		{"not equal", `created_at != 2026-03-20T10:00:00Z`, now, true},
+		{"less than", `created_at < 2026-03-20T10:00:00Z`, now, true},
+		{"greater than", `created_at > 2026-03-18T10:00:00Z`, now, true},
+		{"less than or equal", `created_at <= 2026-03-19T10:00:00Z`, now, true},
+		{"greater than or equal", `created_at >= 2026-03-19T10:00:00Z`, now, true},
+		{"not less than", `created_at < 2026-03-18T10:00:00Z`, now, false},
+		{"not greater than", `created_at > 2026-03-20T10:00:00Z`, now, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filter, err := Compile(tt.expr, schema)
+			assert.NoError(t, err)
+			ctx := NewExecutionContext().SetTimeField("created_at", tt.time)
+			result, err := filter.Execute(ctx)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.result, result)
+		})
+	}
+}
+
+func TestDurationComparison(t *testing.T) {
+	schema := NewSchema().AddField("ttl", TypeDuration)
+
+	tests := []struct {
+		name   string
+		expr   string
+		dur    time.Duration
+		result bool
+	}{
+		{"equal", `ttl == 30m`, 30 * time.Minute, true},
+		{"not equal", `ttl != 1h`, 30 * time.Minute, true},
+		{"less than", `ttl < 1h`, 30 * time.Minute, true},
+		{"greater than", `ttl > 5m`, 30 * time.Minute, true},
+		{"compound duration", `ttl == 1h30m`, 90 * time.Minute, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filter, err := Compile(tt.expr, schema)
+			assert.NoError(t, err)
+			ctx := NewExecutionContext().SetDurationField("ttl", tt.dur)
+			result, err := filter.Execute(ctx)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.result, result)
+		})
+	}
+}
+
+func TestTemporalArithmetic(t *testing.T) {
+	schema := NewSchema().
+		AddField("created_at", TypeTime).
+		AddField("ttl", TypeDuration).
+		AddField("start", TypeTime).
+		AddField("end", TypeTime)
+
+	t.Run("time plus duration", func(t *testing.T) {
+		filter, err := Compile(`created_at + 1h >= 2026-03-19T11:00:00Z`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("time minus duration", func(t *testing.T) {
+		filter, err := Compile(`created_at - 1h == 2026-03-19T09:00:00Z`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("duration plus duration", func(t *testing.T) {
+		filter, err := Compile(`ttl + 30m == 1h`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", 30*time.Minute)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("duration minus duration", func(t *testing.T) {
+		filter, err := Compile(`ttl - 30m == 30m`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", time.Hour)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("duration multiply int", func(t *testing.T) {
+		filter, err := Compile(`ttl * 2 == 1h`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", 30*time.Minute)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("duration divide int", func(t *testing.T) {
+		filter, err := Compile(`ttl / 2 == 30m`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", time.Hour)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("duration divide duration", func(t *testing.T) {
+		filter, err := Compile(`ttl / 30m == 2`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", time.Hour)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("duration mod duration", func(t *testing.T) {
+		filter, err := Compile(`ttl % 1h == 30m`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", 90*time.Minute)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("duration divide by zero", func(t *testing.T) {
+		filter, err := Compile(`ttl / 0 == 30m`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", time.Hour)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+
+	t.Run("duration mod by zero", func(t *testing.T) {
+		filter, err := Compile(`ttl % 0m == 30m`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", time.Hour)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+
+	t.Run("duration div duration by zero", func(t *testing.T) {
+		filter, err := Compile(`ttl / 0m == 2`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", time.Hour)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+
+	t.Run("duration plus time commutative", func(t *testing.T) {
+		filter, err := Compile(`1h + created_at >= 2026-03-19T11:00:00Z`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+}
+
+func TestTimeRangeMembership(t *testing.T) {
+	schema := NewSchema().
+		AddField("created_at", TypeTime).
+		AddField("ttl", TypeDuration)
+
+	t.Run("time in range", func(t *testing.T) {
+		filter, err := Compile(`created_at in {2026-03-19T00:00:00Z..2026-03-20T00:00:00Z}`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("time not in range", func(t *testing.T) {
+		filter, err := Compile(`created_at in {2026-03-19T00:00:00Z..2026-03-20T00:00:00Z}`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 21, 0, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+
+	t.Run("duration in range", func(t *testing.T) {
+		filter, err := Compile(`ttl in {1h..3h}`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", 2*time.Hour)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("duration not in range", func(t *testing.T) {
+		filter, err := Compile(`ttl in {1h..3h}`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", 4*time.Hour)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+}
+
+func TestTimeEqualityCoercion(t *testing.T) {
+	schema := NewSchema().AddField("created_at", TypeTime)
+
+	t.Run("time equals string", func(t *testing.T) {
+		filter, err := Compile(`created_at == "2026-03-19T10:00:00Z"`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("time not equals invalid string", func(t *testing.T) {
+		filter, err := Compile(`created_at == "not-a-date"`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+
+	t.Run("string equals time coercion", func(t *testing.T) {
+		filter, err := Compile(`"2026-03-19T10:00:00Z" == created_at`, schema)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+}
+
+func TestTimeComparisonNilValues(t *testing.T) {
+	t.Run("time comparison with nil left", func(t *testing.T) {
+		filter, _ := Compile(`created_at > 2026-03-19T10:00:00Z`, nil)
+		ctx := NewExecutionContext()
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+
+	t.Run("duration comparison with nil", func(t *testing.T) {
+		filter, _ := Compile(`ttl > 30m`, nil)
+		ctx := NewExecutionContext()
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
 	})
 }

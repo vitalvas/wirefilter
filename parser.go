@@ -3,6 +3,7 @@ package wirefilter
 import (
 	"fmt"
 	"net"
+	"time"
 )
 
 // Operator precedence levels for parsing expressions.
@@ -132,6 +133,10 @@ func (p *Parser) parseExpression(precedence int) Expression {
 	case TokenIP:
 		left = p.parseLiteralExpression()
 	case TokenCIDR:
+		left = p.parseLiteralExpression()
+	case TokenTime:
+		left = p.parseLiteralExpression()
+	case TokenDuration:
 		left = p.parseLiteralExpression()
 	case TokenListRef:
 		left = p.parseListRefExpression()
@@ -290,6 +295,10 @@ func (p *Parser) parseLiteralExpression() Expression {
 		value = IPValue{IP: p.curToken.Value.(net.IP)}
 	case TokenCIDR:
 		value = CIDRValue{IPNet: p.curToken.Value.(*net.IPNet)}
+	case TokenTime:
+		value = TimeValue{Time: p.curToken.Value.(time.Time)}
+	case TokenDuration:
+		value = DurationValue(p.curToken.Value.(time.Duration))
 	}
 
 	return &LiteralExpr{Value: value}

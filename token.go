@@ -61,6 +61,10 @@ const (
 	TokenAsterisk // *
 	TokenListRef  // $list_name
 	TokenError    // lexer error
+
+	// New literal types (appended to preserve existing iota values)
+	TokenTime     // 2026-03-19T10:00:00Z
+	TokenDuration // 30m, 7d, 1h30m
 )
 
 var tokenNames = map[TokenType]string{
@@ -73,6 +77,8 @@ var tokenNames = map[TokenType]string{
 	TokenBool:           "BOOL",
 	TokenIP:             "IP",
 	TokenCIDR:           "CIDR",
+	TokenTime:           "TIME",
+	TokenDuration:       "DURATION",
 	TokenEq:             "==",
 	TokenNe:             "!=",
 	TokenAllEq:          "===",
