@@ -248,7 +248,7 @@ func TestExecutionContext(t *testing.T) {
 	})
 
 	t.Run("set and get func", func(t *testing.T) {
-		handler := func(_ []Value) (Value, error) {
+		handler := func(_ context.Context, _ []Value) (Value, error) {
 			return BoolValue(true), nil
 		}
 		ctx := NewExecutionContext().SetFunc("is_admin", handler)
@@ -256,7 +256,7 @@ func TestExecutionContext(t *testing.T) {
 		assert.True(t, ok)
 		assert.NotNil(t, fn)
 
-		result, err := fn(nil)
+		result, err := fn(context.Background(), nil)
 		assert.NoError(t, err)
 		assert.Equal(t, BoolValue(true), result)
 	})
@@ -309,6 +309,33 @@ func TestExecutionContext(t *testing.T) {
 		ctx := NewExecutionContext()
 		_, ok := ctx.GetFunc("missing")
 		assert.False(t, ok)
+	})
+
+	t.Run("mixed case func registration", func(t *testing.T) {
+		handler := func(_ context.Context, _ []Value) (Value, error) {
+			return BoolValue(true), nil
+		}
+		ctx := NewExecutionContext().SetFunc("GetScore", handler)
+		fn, ok := ctx.GetFunc("getscore")
+		assert.True(t, ok)
+		assert.NotNil(t, fn)
+
+		fn2, ok := ctx.GetFunc("GetScore")
+		assert.True(t, ok)
+		assert.NotNil(t, fn2)
+	})
+
+	t.Run("mixed case func invocation", func(t *testing.T) {
+		filter, err := Compile(`GetScore() == true`, nil)
+		assert.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetFunc("GetScore", func(_ context.Context, _ []Value) (Value, error) {
+				return BoolValue(true), nil
+			})
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
 	})
 
 	t.Run("with context", func(t *testing.T) {
@@ -439,6 +466,36 @@ func TestExecutionContext(t *testing.T) {
 		key := cacheKey("fn", []Value{nil})
 		assert.Contains(t, key, "nil")
 	})
+
+	t.Run("cache key distinguishes types", func(t *testing.T) {
+		keyInt := cacheKey("fn", []Value{IntValue(1)})
+		keyStr := cacheKey("fn", []Value{StringValue("1")})
+		assert.NotEqual(t, keyInt, keyStr)
+	})
+
+	t.Run("cache key stable for map args", func(t *testing.T) {
+		m1 := MapValue{"b": IntValue(2), "a": IntValue(1)}
+		m2 := MapValue{"a": IntValue(1), "b": IntValue(2)}
+		key1 := cacheKey("fn", []Value{m1})
+		key2 := cacheKey("fn", []Value{m2})
+		assert.Equal(t, key1, key2)
+	})
+
+	t.Run("cache key distinguishes nested array element types", func(t *testing.T) {
+		arrInt := ArrayValue{IntValue(1)}
+		arrStr := ArrayValue{StringValue("1")}
+		keyInt := cacheKey("fn", []Value{arrInt})
+		keyStr := cacheKey("fn", []Value{arrStr})
+		assert.NotEqual(t, keyInt, keyStr)
+	})
+
+	t.Run("cache key distinguishes nested map value types", func(t *testing.T) {
+		mapInt := MapValue{"x": IntValue(1)}
+		mapStr := MapValue{"x": StringValue("1")}
+		keyInt := cacheKey("fn", []Value{mapInt})
+		keyStr := cacheKey("fn", []Value{mapStr})
+		assert.NotEqual(t, keyInt, keyStr)
+	})
 }
 
 func TestExecuteWithContext(t *testing.T) {
@@ -483,7 +540,7 @@ func TestExecuteWithContext(t *testing.T) {
 		defer cancel()
 		ctx := NewExecutionContext().
 			WithContext(goCtx).
-			SetFunc("slow_func", func(_ []Value) (Value, error) {
+			SetFunc("slow_func", func(_ context.Context, _ []Value) (Value, error) {
 				time.Sleep(100 * time.Millisecond)
 				return BoolValue(true), nil
 			})
@@ -499,6 +556,24 @@ func TestExecuteWithContext(t *testing.T) {
 		result, err := filter.Execute(ctx)
 		assert.NoError(t, err)
 		assert.True(t, result)
+	})
+
+	t.Run("UDF receives context from WithContext", func(t *testing.T) {
+		filter, _ := Compile(`check_ctx() == true`, nil)
+		goCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var receivedCtx context.Context
+		ctx := NewExecutionContext().
+			WithContext(goCtx).
+			SetFunc("check_ctx", func(c context.Context, _ []Value) (Value, error) {
+				receivedCtx = c
+				return BoolValue(true), nil
+			})
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+		assert.Equal(t, goCtx, receivedCtx)
 	})
 }
 
@@ -561,7 +636,7 @@ func TestExecuteWithCache(t *testing.T) {
 		ctx := NewExecutionContext().
 			EnableCache().
 			SetStringField("name", "test").
-			SetFunc("get_score", func(_ []Value) (Value, error) {
+			SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
 				callCount++
 				return FloatValue(50.0), nil
 			})
@@ -577,7 +652,7 @@ func TestExecuteWithCache(t *testing.T) {
 		filter, _ := Compile(`get_score(name) > 5 and get_score(name) < 100`, nil)
 		ctx := NewExecutionContext().
 			SetStringField("name", "test").
-			SetFunc("get_score", func(_ []Value) (Value, error) {
+			SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
 				callCount++
 				return FloatValue(50.0), nil
 			})
@@ -594,7 +669,7 @@ func TestExecuteWithCache(t *testing.T) {
 			EnableCache().
 			SetStringField("a", "foo").
 			SetStringField("b", "bar").
-			SetFunc("get_score", func(_ []Value) (Value, error) {
+			SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
 				callCount++
 				return FloatValue(50.0), nil
 			})
@@ -620,7 +695,7 @@ func TestExecuteWithCache(t *testing.T) {
 		ctx := NewExecutionContext().
 			EnableCache().
 			SetCacheMaxSize(2).
-			SetFunc("score", func(_ []Value) (Value, error) {
+			SetFunc("score", func(_ context.Context, _ []Value) (Value, error) {
 				callCount++
 				return FloatValue(1.0), nil
 			})
@@ -650,7 +725,7 @@ func TestExecuteWithCache(t *testing.T) {
 		callCount := 0
 		ctx := NewExecutionContext().
 			EnableCache().
-			SetFunc("score", func(_ []Value) (Value, error) {
+			SetFunc("score", func(_ context.Context, _ []Value) (Value, error) {
 				callCount++
 				return FloatValue(1.0), nil
 			})
@@ -672,7 +747,7 @@ func TestExecuteWithCache(t *testing.T) {
 		ctx := NewExecutionContext().
 			EnableCache().
 			SetStringField("domain", "test.com").
-			SetFunc("get_score", func(_ []Value) (Value, error) {
+			SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
 				callCount++
 				return FloatValue(8.0), nil
 			})
@@ -698,7 +773,7 @@ func TestCacheCoverageEdgeCases(t *testing.T) {
 		filter, _ := Compile(`get_val(missing) == get_val(missing)`, nil)
 		ctx := NewExecutionContext().
 			EnableCache().
-			SetFunc("get_val", func(_ []Value) (Value, error) {
+			SetFunc("get_val", func(_ context.Context, _ []Value) (Value, error) {
 				callCount++
 				return IntValue(1), nil
 			})

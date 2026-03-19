@@ -1,6 +1,7 @@
 package wirefilter
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -292,10 +293,10 @@ func FuzzExecuteMultiType(f *testing.F) {
 			SetTable("geo", map[string]string{ipVal: "US", strVal1: strVal2}).
 			SetTableList("allowed", map[string][]string{strVal1: {strVal2}}).
 			SetTableIPList("blocked", map[string][]string{"office": {"10.0.0.0/8"}}).
-			SetFunc("custom_func", func(_ []Value) (Value, error) {
+			SetFunc("custom_func", func(_ context.Context, _ []Value) (Value, error) {
 				return BoolValue(true), nil
 			}).
-			SetFunc("get_score", func(_ []Value) (Value, error) {
+			SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
 				return FloatValue(7.5), nil
 			})
 
@@ -874,4 +875,29 @@ func TestRuleMeta(t *testing.T) {
 		f := filter.SetMeta(RuleMeta{ID: "R1"})
 		assert.Equal(t, "R1", f.Meta().ID)
 	})
+
+	t.Run("SetMeta defensively copies tags", func(t *testing.T) {
+		filter, _ := Compile(`name == "test"`, nil)
+		tags := map[string]string{"env": "prod"}
+		filter.SetMeta(RuleMeta{ID: "R1", Tags: tags})
+		tags["env"] = "staging"
+		assert.Equal(t, "prod", filter.Meta().Tags["env"])
+	})
+
+	t.Run("Meta returns defensive copy of tags", func(t *testing.T) {
+		filter, _ := Compile(`name == "test"`, nil)
+		filter.SetMeta(RuleMeta{ID: "R1", Tags: map[string]string{"env": "prod"}})
+		meta := filter.Meta()
+		meta.Tags["env"] = "staging"
+		assert.Equal(t, "prod", filter.Meta().Tags["env"])
+	})
+}
+
+func TestExecuteNilContext(t *testing.T) {
+	filter, err := Compile(`name == "test"`, nil)
+	require.NoError(t, err)
+
+	result, err := filter.Execute(nil)
+	assert.NoError(t, err)
+	assert.False(t, result)
 }

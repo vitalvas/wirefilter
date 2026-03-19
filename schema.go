@@ -280,7 +280,10 @@ func (v *validator) validate(expr Expression, depth int) error {
 		return v.validate(e.End, depth)
 
 	case *IndexExpr:
-		return v.validate(e.Object, depth)
+		if err := v.validate(e.Object, depth); err != nil {
+			return err
+		}
+		return v.validate(e.Index, depth)
 
 	case *UnpackExpr:
 		return v.validate(e.Array, depth)

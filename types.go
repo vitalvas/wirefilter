@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -229,8 +230,14 @@ type MapValue map[string]Value
 func (m MapValue) Type() Type     { return TypeMap }
 func (m MapValue) IsTruthy() bool { return true } // Present maps are truthy (field presence semantics)
 func (m MapValue) String() string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	parts := make([]string, 0, len(m))
-	for k, v := range m {
+	for _, k := range keys {
+		v := m[k]
 		if v == nil {
 			parts = append(parts, fmt.Sprintf("%q: nil", k))
 		} else {

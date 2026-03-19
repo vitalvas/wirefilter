@@ -206,6 +206,12 @@ func TestSchemaFunctionControl(t *testing.T) {
 		assert.Error(t, err)
 	})
 
+	t.Run("validate index with unknown field as index key", func(t *testing.T) {
+		schema := NewSchema().AddField("data", TypeMap)
+		_, err := Compile(`data[unknown_field] == "val"`, schema)
+		assert.Error(t, err)
+	})
+
 	t.Run("validate list ref expression", func(t *testing.T) {
 		schema := NewSchema().AddField("ip", TypeIP)
 		_, err := Compile(`ip in $blocked`, schema)

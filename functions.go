@@ -40,7 +40,7 @@ func (f *Filter) evaluateFunctionCall(expr *FunctionCallExpr, ctx *ExecutionCont
 		if cached, ok := ctx.getCached(key); ok {
 			return cached, nil
 		}
-		result, err := fn(args)
+		result, err := fn(ctx.Context(), args)
 		if err != nil {
 			return nil, err
 		}

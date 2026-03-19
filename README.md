@@ -37,7 +37,7 @@ inspired by Cloudflare's Wirefilter.
 ## Installation
 
 ```bash
-go get github.com/vitalvas/gokit/wirefilter
+go get github.com/vitalvas/wirefilter
 ```
 
 ## Quick Start
@@ -49,7 +49,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/vitalvas/gokit/wirefilter"
+    "github.com/vitalvas/wirefilter"
 )
 
 func main() {
@@ -591,15 +591,15 @@ filter, _ := wirefilter.Compile(
 ctx := wirefilter.NewExecutionContext().
     SetIPField("src.ip", srcIP).
     SetStringField("smtp.sender.domain", senderDomain).
-    SetFunc("maintenance", func(args []wirefilter.Value) (wirefilter.Value, error) {
+    SetFunc("maintenance", func(ctx context.Context, args []wirefilter.Value) (wirefilter.Value, error) {
         return wirefilter.BoolValue(isMaintenanceWindow()), nil
     }).
-    SetFunc("get_domain_score", func(args []wirefilter.Value) (wirefilter.Value, error) {
+    SetFunc("get_domain_score", func(ctx context.Context, args []wirefilter.Value) (wirefilter.Value, error) {
         domain := string(args[0].(wirefilter.StringValue))
-        score, err := reputationDB.GetScore(domain)
+        score, err := reputationDB.GetScore(ctx, domain)
         return wirefilter.FloatValue(score), err
     }).
-    SetFunc("is_tor", func(args []wirefilter.Value) (wirefilter.Value, error) {
+    SetFunc("is_tor", func(ctx context.Context, args []wirefilter.Value) (wirefilter.Value, error) {
         ip := args[0].(wirefilter.IPValue).IP
         return wirefilter.BoolValue(torExitNodes.Contains(ip)), nil
     })
@@ -612,7 +612,7 @@ Functions can return any value type and work with all operators:
 ```go
 // Return ArrayValue of CIDRValue for use with "in"
 // ip.src in get_spf_cidrs(smtp.sender.domain)
-ctx.SetFunc("get_spf_cidrs", func(args []wirefilter.Value) (wirefilter.Value, error) {
+ctx.SetFunc("get_spf_cidrs", func(ctx context.Context, args []wirefilter.Value) (wirefilter.Value, error) {
     domain := string(args[0].(wirefilter.StringValue))
     cidrs := spfResolver.GetCIDRs(domain)
     arr := make(wirefilter.ArrayValue, 0, len(cidrs))
@@ -625,7 +625,7 @@ ctx.SetFunc("get_spf_cidrs", func(args []wirefilter.Value) (wirefilter.Value, er
 
 // Return CIDRValue for direct "in" check
 // ip.src in get_network(zone)
-ctx.SetFunc("get_network", func(args []wirefilter.Value) (wirefilter.Value, error) {
+ctx.SetFunc("get_network", func(ctx context.Context, args []wirefilter.Value) (wirefilter.Value, error) {
     // ...
     return wirefilter.CIDRValue{IPNet: ipNet}, nil
 })
@@ -635,7 +635,7 @@ ctx.SetFunc("get_network", func(args []wirefilter.Value) (wirefilter.Value, erro
 
 // Receive MapValue (e.g., HTTP headers with map[string][]string)
 // is_valid_headers(http.headers)
-ctx.SetFunc("is_valid_headers", func(args []wirefilter.Value) (wirefilter.Value, error) {
+ctx.SetFunc("is_valid_headers", func(ctx context.Context, args []wirefilter.Value) (wirefilter.Value, error) {
     headers := args[0].(wirefilter.MapValue)
     // inspect headers...
     return wirefilter.BoolValue(true), nil

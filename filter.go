@@ -60,15 +60,30 @@ type Filter struct {
 }
 
 // SetMeta attaches metadata to the compiled filter.
+// The Tags map is defensively copied to prevent external mutation.
 // Returns the filter to allow method chaining.
 func (f *Filter) SetMeta(meta RuleMeta) *Filter {
-	f.meta = meta
+	f.meta = RuleMeta{ID: meta.ID}
+	if meta.Tags != nil {
+		f.meta.Tags = make(map[string]string, len(meta.Tags))
+		for k, v := range meta.Tags {
+			f.meta.Tags[k] = v
+		}
+	}
 	return f
 }
 
 // Meta returns the metadata attached to this filter.
+// The Tags map is defensively copied to prevent external mutation.
 func (f *Filter) Meta() RuleMeta {
-	return f.meta
+	m := RuleMeta{ID: f.meta.ID}
+	if f.meta.Tags != nil {
+		m.Tags = make(map[string]string, len(f.meta.Tags))
+		for k, v := range f.meta.Tags {
+			m.Tags[k] = v
+		}
+	}
+	return m
 }
 
 // Compile parses and compiles a filter expression string into an executable Filter.
@@ -116,7 +131,11 @@ func (f *Filter) Hash() string {
 // Execute evaluates the compiled filter against the provided execution context.
 // Returns true if the filter matches, false otherwise.
 // Returns an error if evaluation fails.
+// If ctx is nil, an empty execution context is used.
 func (f *Filter) Execute(ctx *ExecutionContext) (bool, error) {
+	if ctx == nil {
+		ctx = NewExecutionContext()
+	}
 	result, err := f.evaluate(f.expr, ctx)
 	if err != nil {
 		return false, err

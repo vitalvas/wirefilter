@@ -3,12 +3,16 @@ package wirefilter
 import (
 	"context"
 	"net"
+	"sort"
 	"strings"
 	"time"
 )
 
 // FuncHandler is the type for user-defined function handlers.
-type FuncHandler func(args []Value) (Value, error)
+// The context parameter carries cancellation and deadline signals
+// from ExecutionContext.WithContext, enabling handlers to propagate
+// request-scoped timeouts to downstream operations (e.g., database queries, HTTP calls).
+type FuncHandler func(ctx context.Context, args []Value) (Value, error)
 
 // TraceNode represents the evaluation trace of a single expression node.
 type TraceNode struct {
@@ -269,7 +273,7 @@ func (ctx *ExecutionContext) SetFunc(name string, handler FuncHandler) *Executio
 	if ctx.funcs == nil {
 		ctx.funcs = make(map[string]FuncHandler)
 	}
-	ctx.funcs[name] = handler
+	ctx.funcs[strings.ToLower(name)] = handler
 	return ctx
 }
 
@@ -279,7 +283,7 @@ func (ctx *ExecutionContext) GetFunc(name string) (FuncHandler, bool) {
 	if ctx.funcs == nil {
 		return nil, false
 	}
-	fn, ok := ctx.funcs[name]
+	fn, ok := ctx.funcs[strings.ToLower(name)]
 	return fn, ok
 }
 
@@ -346,6 +350,15 @@ func (ctx *ExecutionContext) CacheLen() int {
 	return len(ctx.cache)
 }
 
+// Context returns the Go context associated with this execution context.
+// Returns context.Background() if no context was set via WithContext.
+func (ctx *ExecutionContext) Context() context.Context {
+	if ctx.goCtx == nil {
+		return context.Background()
+	}
+	return ctx.goCtx
+}
+
 // checkContext checks if the Go context has been cancelled or timed out.
 func (ctx *ExecutionContext) checkContext() error {
 	if ctx.goCtx == nil {
@@ -403,16 +416,55 @@ func (ctx *ExecutionContext) setCache(key string, val Value) {
 }
 
 // cacheKey builds a cache key for a function call.
+// It includes value types at every level of the value tree to prevent
+// collisions across different types, including nested elements in
+// arrays and maps.
 func cacheKey(name string, args []Value) string {
 	var sb strings.Builder
 	sb.WriteString(name)
 	for _, arg := range args {
 		sb.WriteByte(':')
-		if arg == nil {
-			sb.WriteString("nil")
-		} else {
-			sb.WriteString(arg.String())
-		}
+		writeCacheKeyValue(&sb, arg)
 	}
 	return sb.String()
+}
+
+// writeCacheKeyValue writes a type-tagged canonical representation of a value
+// into a string builder, recursively handling arrays and maps.
+func writeCacheKeyValue(sb *strings.Builder, v Value) {
+	if v == nil {
+		sb.WriteString("nil")
+		return
+	}
+	sb.WriteString(v.Type().String())
+	sb.WriteByte('=')
+	switch val := v.(type) {
+	case ArrayValue:
+		sb.WriteByte('[')
+		for i, elem := range val {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			writeCacheKeyValue(sb, elem)
+		}
+		sb.WriteByte(']')
+	case MapValue:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		sb.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(k)
+			sb.WriteByte(':')
+			writeCacheKeyValue(sb, val[k])
+		}
+		sb.WriteByte('}')
+	default:
+		sb.WriteString(v.String())
+	}
 }

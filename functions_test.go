@@ -1,6 +1,7 @@
 package wirefilter
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"testing"
@@ -466,7 +467,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx := NewExecutionContext().
-			SetFunc("maintenance", func(_ []Value) (Value, error) {
+			SetFunc("maintenance", func(_ context.Context, _ []Value) (Value, error) {
 				return BoolValue(true), nil
 			})
 		result, err := filter.Execute(ctx)
@@ -481,7 +482,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 		scores := map[string]float64{"example.com": 8.5, "spam.com": 2.0}
 		ctx := NewExecutionContext().
 			SetStringField("domain", "example.com").
-			SetFunc("get_score", func(args []Value) (Value, error) {
+			SetFunc("get_score", func(_ context.Context, args []Value) (Value, error) {
 				domain := string(args[0].(StringValue))
 				return FloatValue(scores[domain]), nil
 			})
@@ -496,7 +497,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 
 		ctx := NewExecutionContext().
 			SetIPField("src.ip", "1.2.3.4").
-			SetFunc("is_tor", func(_ []Value) (Value, error) {
+			SetFunc("is_tor", func(_ context.Context, _ []Value) (Value, error) {
 				return BoolValue(true), nil
 			})
 		result, err := filter.Execute(ctx)
@@ -511,7 +512,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 		ctx := NewExecutionContext().
 			SetIPField("ip.src", "10.0.0.5").
 			SetStringField("zone", "office").
-			SetFunc("get_allowed_ips", func(_ []Value) (Value, error) {
+			SetFunc("get_allowed_ips", func(_ context.Context, _ []Value) (Value, error) {
 				return ArrayValue{
 					CIDRValue{IPNet: mustParseCIDR("10.0.0.0/8")},
 				}, nil
@@ -528,7 +529,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 		ctx := NewExecutionContext().
 			SetIPField("ip.src", "192.168.1.50").
 			SetStringField("zone", "lan").
-			SetFunc("get_network", func(_ []Value) (Value, error) {
+			SetFunc("get_network", func(_ context.Context, _ []Value) (Value, error) {
 				return CIDRValue{IPNet: mustParseCIDR("192.168.0.0/16")}, nil
 			})
 		result, err := filter.Execute(ctx)
@@ -551,7 +552,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx := NewExecutionContext().
-			SetFunc("failing", func(_ []Value) (Value, error) {
+			SetFunc("failing", func(_ context.Context, _ []Value) (Value, error) {
 				return nil, fmt.Errorf("database unavailable")
 			})
 		_, err = filter.Execute(ctx)
@@ -565,7 +566,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 
 		ctx := NewExecutionContext().
 			SetStringField("domain", "test.com").
-			SetFunc("get_score", func(_ []Value) (Value, error) {
+			SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
 				return FloatValue(6.0), nil
 			})
 		result, err := filter.Execute(ctx)
@@ -580,10 +581,10 @@ func TestUserDefinedFunctions(t *testing.T) {
 		ctx := NewExecutionContext().
 			SetIPField("ip", "1.2.3.4").
 			SetStringField("domain", "spam.com").
-			SetFunc("is_tor", func(_ []Value) (Value, error) {
+			SetFunc("is_tor", func(_ context.Context, _ []Value) (Value, error) {
 				return BoolValue(true), nil
 			}).
-			SetFunc("get_score", func(_ []Value) (Value, error) {
+			SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
 				return FloatValue(1.5), nil
 			})
 		result, err := filter.Execute(ctx)
@@ -647,7 +648,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx := NewExecutionContext().
-			SetFunc("maintenance", func(_ []Value) (Value, error) {
+			SetFunc("maintenance", func(_ context.Context, _ []Value) (Value, error) {
 				return BoolValue(false), nil
 			})
 		result, err := filter.Execute(ctx)

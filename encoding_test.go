@@ -1,6 +1,7 @@
 package wirefilter
 
 import (
+	"context"
 	"net"
 	"testing"
 
@@ -114,16 +115,16 @@ func TestMarshalUnmarshal(t *testing.T) {
 				SetTableList("allowed", map[string][]string{"eng": {"dev", "sre"}}).
 				SetStringField("dept", "eng").
 				SetStringField("name", "dev").
-				SetFunc("maintenance", func(_ []Value) (Value, error) {
+				SetFunc("maintenance", func(_ context.Context, _ []Value) (Value, error) {
 					return BoolValue(true), nil
 				}).
-				SetFunc("get_score", func(_ []Value) (Value, error) {
+				SetFunc("get_score", func(_ context.Context, _ []Value) (Value, error) {
 					return FloatValue(7.5), nil
 				}).
-				SetFunc("is_tor", func(_ []Value) (Value, error) {
+				SetFunc("is_tor", func(_ context.Context, _ []Value) (Value, error) {
 					return BoolValue(false), nil
 				}).
-				SetFunc("get_cidrs", func(_ []Value) (Value, error) {
+				SetFunc("get_cidrs", func(_ context.Context, _ []Value) (Value, error) {
 					_, ipNet, _ := net.ParseCIDR("192.168.0.0/16")
 					return ArrayValue{CIDRValue{IPNet: ipNet}}, nil
 				})
