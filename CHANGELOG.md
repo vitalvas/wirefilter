@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/vitalvas/wirefilter/compare/v0.2.0...v0.3.0) (2026-03-21)
+
+
+### Features
+
+* support negated duration literals (-30m, -2d4h) ([4a4859f](https://github.com/vitalvas/wirefilter/commit/4a4859fb5864c12dc5ca2e6e55cf91dac3434558))
+
 ## [0.2.0](https://github.com/vitalvas/wirefilter/compare/v0.1.0...v0.2.0) (2026-03-21)
 
 
