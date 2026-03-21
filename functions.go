@@ -22,18 +22,23 @@ func (f *Filter) evaluateFunctionCall(expr *FunctionCallExpr, ctx *ExecutionCont
 		return NewTimeValue(ctx.now()), nil
 	}
 
-	// Evaluate all arguments for standard functions
-	args := make([]Value, len(expr.Arguments))
-	for i, arg := range expr.Arguments {
+	// Evaluate all arguments for standard functions.
+	// Stack-allocate for common case (up to 4 args) to avoid heap allocation.
+	var argsBuf [4]Value
+	args := argsBuf[:0]
+	if len(expr.Arguments) > len(argsBuf) {
+		args = make([]Value, 0, len(expr.Arguments))
+	}
+	for _, arg := range expr.Arguments {
 		val, err := f.evaluate(arg, ctx)
 		if err != nil {
 			return nil, err
 		}
-		args[i] = val
+		args = append(args, val)
 	}
 
-	if fn, ok := f.builtinFuncs()[name]; ok {
-		return fn(args)
+	if result, ok, err := f.callBuiltin(name, args); ok {
+		return result, err
 	}
 
 	// Check user-defined functions in the execution context (with optional caching)
@@ -53,46 +58,114 @@ func (f *Filter) evaluateFunctionCall(expr *FunctionCallExpr, ctx *ExecutionCont
 	return nil, nil
 }
 
-// builtinFuncs returns the map of built-in function implementations.
-func (f *Filter) builtinFuncs() map[string]func([]Value) (Value, error) {
-	return map[string]func([]Value) (Value, error){
-		"lower":         f.fnLower,
-		"upper":         f.fnUpper,
-		"len":           f.fnLen,
-		"starts_with":   f.fnStartsWith,
-		"ends_with":     f.fnEndsWith,
-		"concat":        f.fnConcat,
-		"substring":     f.fnSubstring,
-		"split":         f.fnSplit,
-		"join":          f.fnJoin,
-		"has_key":       f.fnHasKey,
-		"has_value":     f.fnHasValue,
-		"url_decode":    f.fnURLDecode,
-		"cidr":          f.fnCIDR,
-		"cidr6":         f.fnCIDR6,
-		"regex_replace": f.fnRegexReplace,
-		"trim":          f.fnTrim,
-		"trim_left":     f.fnTrimLeft,
-		"trim_right":    f.fnTrimRight,
-		"replace":       f.fnReplace,
-		"count":         f.fnCount,
-		"coalesce":      f.fnCoalesce,
-		"contains_word": f.fnContainsWord,
-		"abs":           f.fnAbs,
-		"ceil":          f.fnCeil,
-		"floor":         f.fnFloor,
-		"round":         f.fnRound,
-		"is_ipv4":       f.fnIsIPv4,
-		"is_ipv6":       f.fnIsIPv6,
-		"is_loopback":   f.fnIsLoopback,
-		"regex_extract": f.fnRegexExtract,
-		"intersection":  f.fnIntersection,
-		"union":         f.fnUnion,
-		"difference":    f.fnDifference,
-		"contains_any":  f.fnContainsAny,
-		"contains_all":  f.fnContainsAll,
-		"exists":        f.fnExists,
+// callBuiltin dispatches a built-in function by name using a switch for zero allocations.
+// Returns (result, true) if the function exists, (nil, false) otherwise.
+func (f *Filter) callBuiltin(name string, args []Value) (Value, bool, error) {
+	if result, ok, err := f.callBuiltinString(name, args); ok {
+		return result, true, err
 	}
+	if result, ok, err := f.callBuiltinMath(name, args); ok {
+		return result, true, err
+	}
+	return nil, false, nil
+}
+
+// callBuiltinString dispatches string, array, map, IP, and regex functions.
+func (f *Filter) callBuiltinString(name string, args []Value) (Value, bool, error) {
+	var result Value
+	var err error
+
+	switch name {
+	case "lower":
+		result, err = f.fnLower(args)
+	case "upper":
+		result, err = f.fnUpper(args)
+	case "len":
+		result, err = f.fnLen(args)
+	case "starts_with":
+		result, err = f.fnStartsWith(args)
+	case "ends_with":
+		result, err = f.fnEndsWith(args)
+	case "concat":
+		result, err = f.fnConcat(args)
+	case "substring":
+		result, err = f.fnSubstring(args)
+	case "split":
+		result, err = f.fnSplit(args)
+	case "join":
+		result, err = f.fnJoin(args)
+	case "has_key":
+		result, err = f.fnHasKey(args)
+	case "has_value":
+		result, err = f.fnHasValue(args)
+	case "url_decode":
+		result, err = f.fnURLDecode(args)
+	case "trim":
+		result, err = f.fnTrim(args)
+	case "trim_left":
+		result, err = f.fnTrimLeft(args)
+	case "trim_right":
+		result, err = f.fnTrimRight(args)
+	case "replace":
+		result, err = f.fnReplace(args)
+	case "regex_replace":
+		result, err = f.fnRegexReplace(args)
+	case "regex_extract":
+		result, err = f.fnRegexExtract(args)
+	case "contains_word":
+		result, err = f.fnContainsWord(args)
+	case "cidr":
+		result, err = f.fnCIDR(args)
+	case "cidr6":
+		result, err = f.fnCIDR6(args)
+	case "is_ipv4":
+		result, err = f.fnIsIPv4(args)
+	case "is_ipv6":
+		result, err = f.fnIsIPv6(args)
+	case "is_loopback":
+		result, err = f.fnIsLoopback(args)
+	default:
+		return nil, false, nil
+	}
+
+	return result, true, err
+}
+
+// callBuiltinMath dispatches math, array set, and utility functions.
+func (f *Filter) callBuiltinMath(name string, args []Value) (Value, bool, error) {
+	var result Value
+	var err error
+
+	switch name {
+	case "abs":
+		result, err = f.fnAbs(args)
+	case "ceil":
+		result, err = f.fnCeil(args)
+	case "floor":
+		result, err = f.fnFloor(args)
+	case "round":
+		result, err = f.fnRound(args)
+	case "count":
+		result, err = f.fnCount(args)
+	case "coalesce":
+		result, err = f.fnCoalesce(args)
+	case "exists":
+		result, err = f.fnExists(args)
+	case "intersection":
+		result, err = f.fnIntersection(args)
+	case "union":
+		result, err = f.fnUnion(args)
+	case "difference":
+		result, err = f.fnDifference(args)
+	case "contains_any":
+		result, err = f.fnContainsAny(args)
+	case "contains_all":
+		result, err = f.fnContainsAll(args)
+	default:
+		return nil, false, nil
+	}
+
+	return result, true, err
 }
 
 // lower(String) -> String

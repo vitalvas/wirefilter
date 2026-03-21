@@ -363,44 +363,71 @@ func (d DurationValue) String() string {
 	return sb.String()
 }
 
-// IntervalValue represents a non-materialized range for time/duration membership tests.
+// IntervalValue represents a non-materialized range for membership tests.
+// Start and End are stored as raw int64 to avoid interface boxing allocations.
 type IntervalValue struct {
-	Start Value
-	End   Value
+	start    int64
+	end      int64
+	elemType Type
 }
 
-func (iv IntervalValue) Type() Type     { return iv.Start.Type() }
+// NewTimeInterval creates an interval from two TimeValues.
+func NewTimeInterval(start, end TimeValue) IntervalValue {
+	return IntervalValue{start: int64(start), end: int64(end), elemType: TypeTime}
+}
+
+// NewDurationInterval creates an interval from two DurationValues.
+func NewDurationInterval(start, end DurationValue) IntervalValue {
+	return IntervalValue{start: int64(start), end: int64(end), elemType: TypeDuration}
+}
+
+// NewIntInterval creates an interval from two IntValues.
+func NewIntInterval(start, end IntValue) IntervalValue {
+	return IntervalValue{start: int64(start), end: int64(end), elemType: TypeInt}
+}
+
+func (iv IntervalValue) Type() Type     { return iv.elemType }
 func (iv IntervalValue) IsTruthy() bool { return true }
 func (iv IntervalValue) String() string {
-	return fmt.Sprintf("%s..%s", iv.Start.String(), iv.End.String())
+	switch iv.elemType {
+	case TypeInt:
+		return fmt.Sprintf("%d..%d", iv.start, iv.end)
+	case TypeTime:
+		return fmt.Sprintf("%s..%s", TimeValue(iv.start).String(), TimeValue(iv.end).String())
+	case TypeDuration:
+		return fmt.Sprintf("%s..%s", DurationValue(iv.start).String(), DurationValue(iv.end).String())
+	}
+	return ""
 }
 func (iv IntervalValue) Equal(v Value) bool {
 	other, ok := v.(IntervalValue)
 	if !ok {
 		return false
 	}
-	return iv.Start.Equal(other.Start) && iv.End.Equal(other.End)
+	return iv.start == other.start && iv.end == other.end && iv.elemType == other.elemType
 }
 
-// Contains checks if a value falls within the interval [Start, End].
+// Contains checks if a value falls within the interval [start, end].
 func (iv IntervalValue) Contains(v Value) bool {
-	switch iv.Start.Type() {
+	switch iv.elemType {
+	case TypeInt:
+		if v.Type() != TypeInt {
+			return false
+		}
+		n := int64(v.(IntValue))
+		return n >= iv.start && n <= iv.end
 	case TypeTime:
 		if v.Type() != TypeTime {
 			return false
 		}
-		t := int64(v.(TimeValue))
-		start := int64(iv.Start.(TimeValue))
-		end := int64(iv.End.(TimeValue))
-		return t >= start && t <= end
+		n := int64(v.(TimeValue))
+		return n >= iv.start && n <= iv.end
 	case TypeDuration:
 		if v.Type() != TypeDuration {
 			return false
 		}
-		d := time.Duration(v.(DurationValue))
-		start := time.Duration(iv.Start.(DurationValue))
-		end := time.Duration(iv.End.(DurationValue))
-		return d >= start && d <= end
+		n := int64(v.(DurationValue))
+		return n >= iv.start && n <= iv.end
 	}
 	return false
 }

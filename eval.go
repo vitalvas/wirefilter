@@ -10,7 +10,11 @@ import (
 )
 
 func (f *Filter) evaluateArrayExpr(expr *ArrayExpr, ctx *ExecutionContext) (Value, error) {
-	values := make([]Value, 0, len(expr.Elements))
+	var buf [8]Value
+	values := buf[:0]
+	if len(expr.Elements) > len(buf) {
+		values = make([]Value, 0, len(expr.Elements))
+	}
 	for _, elem := range expr.Elements {
 		if rangeExpr, ok := elem.(*RangeExpr); ok {
 			rangeVals, err := f.evaluateRangeExpr(rangeExpr, ctx)
@@ -51,29 +55,17 @@ func (f *Filter) evaluateRangeExpr(expr *RangeExpr, ctx *ExecutionContext) (Valu
 
 	// Time/duration ranges produce IntervalValue instead of materialized arrays
 	if start.Type() == TypeTime && end.Type() == TypeTime {
-		return IntervalValue{Start: start, End: end}, nil
+		return NewTimeInterval(start.(TimeValue), end.(TimeValue)), nil
 	}
 	if start.Type() == TypeDuration && end.Type() == TypeDuration {
-		return IntervalValue{Start: start, End: end}, nil
+		return NewDurationInterval(start.(DurationValue), end.(DurationValue)), nil
 	}
 
-	if start.Type() != TypeInt || end.Type() != TypeInt {
-		return ArrayValue([]Value{}), nil
+	if start.Type() == TypeInt && end.Type() == TypeInt {
+		return NewIntInterval(start.(IntValue), end.(IntValue)), nil
 	}
 
-	startInt := int64(start.(IntValue))
-	endInt := int64(end.(IntValue))
-
-	if startInt > endInt {
-		return ArrayValue([]Value{}), nil
-	}
-
-	values := make([]Value, 0, endInt-startInt+1)
-	for i := startInt; i <= endInt; i++ {
-		values = append(values, IntValue(i))
-	}
-
-	return ArrayValue(values), nil
+	return ArrayValue([]Value{}), nil
 }
 
 func (f *Filter) evaluateFieldExpr(expr *FieldExpr, ctx *ExecutionContext) (Value, error) {

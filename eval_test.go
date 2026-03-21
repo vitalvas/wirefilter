@@ -4005,3 +4005,60 @@ func TestTimeComparisonNilValues(t *testing.T) {
 		assert.False(t, result)
 	})
 }
+
+func TestTemporalArithmeticEdgeCases(t *testing.T) {
+	t.Run("duration multiply float", func(t *testing.T) {
+		filter, err := Compile(`ttl * 1.5 == 1h`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", 40*time.Minute)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("float multiply duration", func(t *testing.T) {
+		filter, err := Compile(`1.5 * ttl == 1h`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", 40*time.Minute)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("int multiply duration commutative", func(t *testing.T) {
+		filter, err := Compile(`2 * ttl == 1h`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", 30*time.Minute)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("duration divide float", func(t *testing.T) {
+		filter, err := Compile(`ttl / 1.5 == 40m`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", time.Hour)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("duration divide float zero", func(t *testing.T) {
+		filter, err := Compile(`ttl / 0.0 == 40m`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", time.Hour)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+
+	t.Run("time unsupported op returns nil", func(t *testing.T) {
+		filter, err := Compile(`created_at * 2 == 0`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.False(t, result)
+	})
+}

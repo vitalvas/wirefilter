@@ -65,10 +65,10 @@ func BenchmarkValueOperations(b *testing.B) {
 	})
 
 	b.Run("interval contains time", func(b *testing.B) {
-		iv := IntervalValue{
-			Start: NewTimeValue(time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)),
-			End:   NewTimeValue(time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC)),
-		}
+		iv := NewTimeInterval(
+			NewTimeValue(time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)),
+			NewTimeValue(time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC)),
+		)
 		v := NewTimeValue(time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC))
 		b.ReportAllocs()
 		for b.Loop() {
@@ -77,10 +77,7 @@ func BenchmarkValueOperations(b *testing.B) {
 	})
 
 	b.Run("interval contains duration", func(b *testing.B) {
-		iv := IntervalValue{
-			Start: DurationValue(time.Hour),
-			End:   DurationValue(3 * time.Hour),
-		}
+		iv := NewDurationInterval(DurationValue(time.Hour), DurationValue(3*time.Hour))
 		v := DurationValue(2 * time.Hour)
 		b.ReportAllocs()
 		for b.Loop() {
@@ -809,10 +806,7 @@ func TestIntervalValue(t *testing.T) {
 	t2 := time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC)
 
 	t.Run("time interval contains", func(t *testing.T) {
-		iv := IntervalValue{
-			Start: NewTimeValue(t1),
-			End:   NewTimeValue(t2),
-		}
+		iv := NewTimeInterval(NewTimeValue(t1), NewTimeValue(t2))
 		mid := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
 		before := time.Date(2026, 3, 18, 0, 0, 0, 0, time.UTC)
 		after := time.Date(2026, 3, 21, 0, 0, 0, 0, time.UTC)
@@ -826,10 +820,7 @@ func TestIntervalValue(t *testing.T) {
 	})
 
 	t.Run("duration interval contains", func(t *testing.T) {
-		iv := IntervalValue{
-			Start: DurationValue(time.Hour),
-			End:   DurationValue(3 * time.Hour),
-		}
+		iv := NewDurationInterval(DurationValue(time.Hour), DurationValue(3*time.Hour))
 		assert.True(t, iv.Contains(DurationValue(2*time.Hour)))
 		assert.True(t, iv.Contains(DurationValue(time.Hour)))
 		assert.True(t, iv.Contains(DurationValue(3*time.Hour)))
@@ -839,29 +830,26 @@ func TestIntervalValue(t *testing.T) {
 	})
 
 	t.Run("string", func(t *testing.T) {
-		iv := IntervalValue{
-			Start: DurationValue(time.Hour),
-			End:   DurationValue(2 * time.Hour),
-		}
+		iv := NewDurationInterval(DurationValue(time.Hour), DurationValue(2*time.Hour))
 		assert.Equal(t, "1h..2h", iv.String())
 	})
 
 	t.Run("equal", func(t *testing.T) {
-		iv1 := IntervalValue{Start: DurationValue(time.Hour), End: DurationValue(2 * time.Hour)}
-		iv2 := IntervalValue{Start: DurationValue(time.Hour), End: DurationValue(2 * time.Hour)}
-		iv3 := IntervalValue{Start: DurationValue(time.Hour), End: DurationValue(3 * time.Hour)}
+		iv1 := NewDurationInterval(DurationValue(time.Hour), DurationValue(2*time.Hour))
+		iv2 := NewDurationInterval(DurationValue(time.Hour), DurationValue(2*time.Hour))
+		iv3 := NewDurationInterval(DurationValue(time.Hour), DurationValue(3*time.Hour))
 		assert.True(t, iv1.Equal(iv2))
 		assert.False(t, iv1.Equal(iv3))
 		assert.False(t, iv1.Equal(IntValue(42)))
 	})
 
 	t.Run("type returns start type", func(t *testing.T) {
-		iv := IntervalValue{Start: DurationValue(time.Hour), End: DurationValue(2 * time.Hour)}
+		iv := NewDurationInterval(DurationValue(time.Hour), DurationValue(2*time.Hour))
 		assert.Equal(t, TypeDuration, iv.Type())
 	})
 
 	t.Run("truthy", func(t *testing.T) {
-		iv := IntervalValue{Start: DurationValue(time.Hour), End: DurationValue(2 * time.Hour)}
+		iv := NewDurationInterval(DurationValue(time.Hour), DurationValue(2*time.Hour))
 		assert.True(t, iv.IsTruthy())
 	})
 }
