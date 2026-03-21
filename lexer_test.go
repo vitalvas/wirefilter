@@ -966,4 +966,33 @@ func TestLexerTimestampAndDuration(t *testing.T) {
 		tok := lexer.NextToken()
 		assert.Equal(t, TokenIP, tok.Type)
 	})
+
+	t.Run("negated duration -30m", func(t *testing.T) {
+		lexer := NewLexer(`-30m`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenDuration, tok.Type)
+		assert.Equal(t, "-30m", tok.Literal)
+		assert.Equal(t, -30*time.Minute, tok.Value.(time.Duration))
+	})
+
+	t.Run("negated compound duration -2d4h", func(t *testing.T) {
+		lexer := NewLexer(`-2d4h`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenDuration, tok.Type)
+		expected := -(2*24*time.Hour + 4*time.Hour)
+		assert.Equal(t, expected, tok.Value.(time.Duration))
+	})
+
+	t.Run("negated duration in expression", func(t *testing.T) {
+		lexer := NewLexer(`ttl == -30m`)
+		tok := lexer.NextToken()
+		assert.Equal(t, TokenIdent, tok.Type)
+
+		tok = lexer.NextToken()
+		assert.Equal(t, TokenEq, tok.Type)
+
+		tok = lexer.NextToken()
+		assert.Equal(t, TokenDuration, tok.Type)
+		assert.Equal(t, -30*time.Minute, tok.Value.(time.Duration))
+	})
 }

@@ -4062,3 +4062,29 @@ func TestTemporalArithmeticEdgeCases(t *testing.T) {
 		assert.False(t, result)
 	})
 }
+
+func TestNegatedDuration(t *testing.T) {
+	t.Run("negative duration literal comparison", func(t *testing.T) {
+		filter, err := Compile(`ttl == -30m`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetDurationField("ttl", -30*time.Minute)
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("negative duration in time arithmetic", func(t *testing.T) {
+		filter, err := Compile(`created_at + -1h == 2026-03-19T09:00:00Z`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().
+			SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("negative duration string representation", func(t *testing.T) {
+		d := DurationValue(-7*24*time.Hour - 12*time.Hour - 30*time.Minute)
+		assert.Equal(t, "-7d12h30m", d.String())
+	})
+}

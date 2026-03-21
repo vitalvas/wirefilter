@@ -533,8 +533,12 @@ func (l *Lexer) readNumberToken() Token {
 	}
 
 	// Check for duration literal: digits followed by duration suffix
-	if !isNegative && len(digitsPart) > 0 && isDurationSuffix(l.ch) {
-		return l.readDurationToken(start, digitsPart)
+	if len(digitsPart) > 0 && isDurationSuffix(l.ch) {
+		tok := l.readDurationToken(start, digitsPart)
+		if isNegative && tok.Type == TokenDuration {
+			tok.Value = -tok.Value.(time.Duration)
+		}
+		return tok
 	}
 
 	// Continue reading IP/CIDR/Number characters
