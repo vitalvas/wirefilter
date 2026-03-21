@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/vitalvas/wirefilter/compare/v0.1.0...v0.2.0) (2026-03-21)
+
+
+### Features
+
+* add DisableRegex feature flag, optimize TimeValue to zero-alloc int64, add fuzz and bench coverage ([5d78854](https://github.com/vitalvas/wirefilter/commit/5d78854037d773d9afec2ff736226b5c979d4cc2))
+* add parser multi-error recovery and property-based testing ([87bdf1f](https://github.com/vitalvas/wirefilter/commit/87bdf1f18ce606e0e1a58b005d9b343e368bced8))
+
+
+### Performance Improvements
+
+* zero-alloc int ranges, stack-buffered arrays/args, switch-based function dispatch ([1268c60](https://github.com/vitalvas/wirefilter/commit/1268c60667c8326d1a8fa04ba1c567edee6e8815))
+
 ## [0.1.0](https://github.com/vitalvas/wirefilter/compare/v0.0.1...v0.1.0) (2026-03-19)
 
 
