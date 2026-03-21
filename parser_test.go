@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkParser(b *testing.B) {
@@ -758,5 +759,64 @@ func TestParser(t *testing.T) {
 
 		literal := indexExpr.Index.(*LiteralExpr)
 		assert.Equal(t, StringValue("mode"), literal.Value)
+	})
+}
+
+func TestParserErrorRecovery(t *testing.T) {
+	t.Run("multiple errors collected", func(t *testing.T) {
+		_, err := Compile(`@ and $`, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected character")
+	})
+
+	t.Run("recovers past bad token to find more errors", func(t *testing.T) {
+		lexer := NewLexer(`@ and !`)
+		parser := NewParser(lexer)
+		_, err := parser.Parse()
+		require.Error(t, err)
+		assert.True(t, len(parser.Errors()) >= 1)
+	})
+
+	t.Run("missing paren collects error and continues", func(t *testing.T) {
+		_, err := Compile(`(a == 1 and b == 2`, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expected )")
+	})
+
+	t.Run("missing brace collects error", func(t *testing.T) {
+		_, err := Compile(`x in {1, 2, 3`, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expected }")
+	})
+
+	t.Run("missing bracket collects error", func(t *testing.T) {
+		_, err := Compile(`tags[0 == "x"`, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expected ]")
+	})
+
+	t.Run("bad index type collects error", func(t *testing.T) {
+		_, err := Compile(`tags[true] == "x"`, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "index must be a literal")
+	})
+
+	t.Run("function missing paren collects error", func(t *testing.T) {
+		_, err := Compile(`lower(name == "x"`, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expected )")
+	})
+
+	t.Run("unpack missing bracket collects error", func(t *testing.T) {
+		_, err := Compile(`tags[* == "x"`, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expected ]")
+	})
+
+	t.Run("errors method returns all errors", func(t *testing.T) {
+		lexer := NewLexer(`@ ==`)
+		parser := NewParser(lexer)
+		_, _ = parser.Parse()
+		assert.NotEmpty(t, parser.Errors())
 	})
 }

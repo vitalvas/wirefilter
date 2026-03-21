@@ -1446,9 +1446,14 @@ The filter engine is designed for high performance:
 
 - Filters are compiled once and can be executed multiple times
 - Schema validation happens at compile time, not runtime
-- Efficient AST-based evaluation
+- Efficient AST-based evaluation with zero-alloc hot paths
 - No runtime reflection
 - Binary deserialization is ~2x faster than compiling from string
+- Zero-allocation comparisons for string, int, float, bool, time, duration types
+- Non-materialized integer ranges (`{200..299}`) use O(1) interval checks instead of array allocation
+- Stack-buffered arrays (up to 8 elements) and function args (up to 4 args) avoid heap allocation
+- Switch-based built-in function dispatch (no map allocation per call)
+- Time values stored as int64 nanoseconds to avoid interface boxing overhead
 
 For optimal performance, compile filters once and reuse them across multiple
 executions. For large rule sets, pre-compile and store the binary representation
@@ -1463,14 +1468,18 @@ The library returns errors for:
 - Operator-type mismatches (when schema is provided)
 - Expression complexity limits exceeded
 - Invalid regex patterns
+- Disabled regex usage (when `DisableRegex()` is set)
 - Context cancellation or timeout (`context.DeadlineExceeded`, `context.Canceled`)
 - User-defined function errors
 
-Always check returned errors:
+The parser supports **multi-error recovery**: when a syntax error is encountered,
+it synchronizes to the next logical operator or closing delimiter and continues
+parsing to report as many errors as possible in a single pass.
 
 ```go
 filter, err := wirefilter.Compile(expression, schema)
 if err != nil {
+    // err.Error() may contain multiple parse errors
     log.Printf("Compilation error: %v", err)
     return
 }

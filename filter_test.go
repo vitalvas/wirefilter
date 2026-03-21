@@ -2,6 +2,9 @@ package wirefilter
 
 import (
 	"context"
+	"fmt"
+	"math/rand/v2"
+	"strings"
 	"testing"
 	"time"
 
@@ -1257,4 +1260,428 @@ func TestEvaluateInnerEdgeCases(t *testing.T) {
 		assert.NoError(t, err)
 		assert.False(t, result) // nil result
 	})
+}
+
+// --- Property-based testing helpers ---
+
+func randomAST(rng *rand.Rand, depth int) string {
+	if depth <= 0 {
+		return randomLeaf(rng)
+	}
+
+	switch rng.IntN(10) {
+	case 0:
+		ops := []string{"and", "or", "xor"}
+		return fmt.Sprintf("%s %s %s", randomAST(rng, depth-1), ops[rng.IntN(len(ops))], randomAST(rng, depth-1))
+	case 1:
+		ops := []string{"==", "!=", "<", ">", "<=", ">="}
+		return fmt.Sprintf("%s %s %s", randomFieldOrFunc(rng), ops[rng.IntN(len(ops))], randomLiteral(rng))
+	case 2:
+		return fmt.Sprintf("%s contains \"%s\"", randomStringField(rng), randomWord(rng))
+	case 3:
+		return fmt.Sprintf("%s in %s", randomFieldOrFunc(rng), randomSet(rng))
+	case 4:
+		return fmt.Sprintf("not %s", randomAST(rng, depth-1))
+	case 5:
+		return fmt.Sprintf("(%s)", randomAST(rng, depth-1))
+	case 6:
+		ops := []string{"+", "-", "*"}
+		return fmt.Sprintf("%s %s %s > 0", randomNumField(rng), ops[rng.IntN(len(ops))], randomInt(rng))
+	case 7:
+		return fmt.Sprintf("ts %s %s", randomCmpOp(rng), randomTimestamp(rng))
+	case 8:
+		return fmt.Sprintf("ttl %s %s", randomCmpOp(rng), randomDuration(rng))
+	default:
+		return randomField(rng)
+	}
+}
+
+func randomLeaf(rng *rand.Rand) string {
+	switch rng.IntN(5) {
+	case 0:
+		return fmt.Sprintf("%s == \"%s\"", randomField(rng), randomWord(rng))
+	case 1:
+		return fmt.Sprintf("%s > %s", randomNumField(rng), randomInt(rng))
+	case 2:
+		return randomField(rng)
+	case 3:
+		return fmt.Sprintf("ts >= %s", randomTimestamp(rng))
+	default:
+		return fmt.Sprintf("ttl > %s", randomDuration(rng))
+	}
+}
+
+func randomField(rng *rand.Rand) string {
+	fields := []string{"name", "host", "path", "method", "ua", "country", "region"}
+	return fields[rng.IntN(len(fields))]
+}
+
+func randomStringField(rng *rand.Rand) string {
+	fields := []string{"name", "host", "path", "method", "ua"}
+	return fields[rng.IntN(len(fields))]
+}
+
+func randomNumField(rng *rand.Rand) string {
+	fields := []string{"status", "score", "port", "count"}
+	return fields[rng.IntN(len(fields))]
+}
+
+func randomFieldOrFunc(rng *rand.Rand) string {
+	if rng.IntN(4) == 0 {
+		funcs := []string{"lower(name)", "upper(host)", "len(path)"}
+		return funcs[rng.IntN(len(funcs))]
+	}
+	return randomField(rng)
+}
+
+func randomLiteral(rng *rand.Rand) string {
+	switch rng.IntN(5) {
+	case 0:
+		return fmt.Sprintf("\"%s\"", randomWord(rng))
+	case 1:
+		return randomInt(rng)
+	case 2:
+		return fmt.Sprintf("%d.%d", rng.IntN(100), rng.IntN(100))
+	case 3:
+		return randomTimestamp(rng)
+	default:
+		return randomDuration(rng)
+	}
+}
+
+func randomWord(rng *rand.Rand) string {
+	words := []string{"test", "admin", "api", "prod", "dev", "user", "root", "login"}
+	return words[rng.IntN(len(words))]
+}
+
+func randomInt(rng *rand.Rand) string {
+	return fmt.Sprintf("%d", rng.IntN(1000))
+}
+
+func randomCmpOp(rng *rand.Rand) string {
+	ops := []string{"==", "!=", "<", ">", "<=", ">="}
+	return ops[rng.IntN(len(ops))]
+}
+
+func randomSet(rng *rand.Rand) string {
+	n := 2 + rng.IntN(5)
+	parts := make([]string, n)
+	for i := range n {
+		parts[i] = randomInt(rng)
+	}
+	return fmt.Sprintf("{%s}", strings.Join(parts, ", "))
+}
+
+func randomTimestamp(rng *rand.Rand) string {
+	return fmt.Sprintf("%04d-%02d-%02dT%02d:00:00Z", 2024+rng.IntN(4), 1+rng.IntN(12), 1+rng.IntN(28), rng.IntN(24))
+}
+
+func randomDuration(rng *rand.Rand) string {
+	units := []string{"s", "m", "h", "d"}
+	return fmt.Sprintf("%d%s", 1+rng.IntN(59), units[rng.IntN(len(units))])
+}
+
+func propertySchema() *Schema {
+	return NewSchema().
+		AddField("name", TypeString).
+		AddField("host", TypeString).
+		AddField("path", TypeString).
+		AddField("method", TypeString).
+		AddField("ua", TypeString).
+		AddField("country", TypeString).
+		AddField("region", TypeString).
+		AddField("status", TypeInt).
+		AddField("score", TypeInt).
+		AddField("port", TypeInt).
+		AddField("count", TypeInt).
+		AddField("ts", TypeTime).
+		AddField("ttl", TypeDuration)
+}
+
+func propertyContext(rng *rand.Rand) *ExecutionContext {
+	fixed := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
+	return NewExecutionContext().
+		SetStringField("name", randomWord(rng)).
+		SetStringField("host", fmt.Sprintf("%s.example.com", randomWord(rng))).
+		SetStringField("path", fmt.Sprintf("/%s", randomWord(rng))).
+		SetStringField("method", "GET").
+		SetStringField("ua", "Mozilla/5.0").
+		SetStringField("country", "US").
+		SetStringField("region", "us-west-2").
+		SetIntField("status", int64(200+rng.IntN(400))).
+		SetIntField("score", int64(rng.IntN(100))).
+		SetIntField("port", int64(80+rng.IntN(9000))).
+		SetIntField("count", int64(rng.IntN(1000))).
+		SetTimeField("ts", fixed.Add(-time.Duration(rng.IntN(86400))*time.Second)).
+		SetDurationField("ttl", time.Duration(rng.IntN(86400))*time.Second).
+		WithNow(func() time.Time { return fixed })
+}
+
+// --- Property-based tests ---
+
+func TestPropertyCompileDeterminism(t *testing.T) {
+	schema := propertySchema()
+	rng := rand.New(rand.NewPCG(42, 0))
+
+	for range 1000 {
+		expr := randomAST(rng, 2+rng.IntN(3))
+		f1, err1 := Compile(expr, schema)
+		f2, err2 := Compile(expr, schema)
+		if (err1 == nil) != (err2 == nil) {
+			t.Fatalf("non-deterministic compile for %q", expr)
+		}
+		if err1 != nil {
+			continue
+		}
+		assert.Equal(t, f1.Hash(), f2.Hash(), "hash mismatch for %q", expr)
+	}
+}
+
+func TestPropertyExecuteDeterminism(t *testing.T) {
+	schema := propertySchema()
+	rng := rand.New(rand.NewPCG(42, 0))
+
+	for range 1000 {
+		expr := randomAST(rng, 2+rng.IntN(3))
+		f, err := Compile(expr, schema)
+		if err != nil {
+			continue
+		}
+		ctx := propertyContext(rng)
+		r1, e1 := f.Execute(ctx)
+		r2, e2 := f.Execute(ctx)
+		if (e1 == nil) != (e2 == nil) || r1 != r2 {
+			t.Fatalf("non-deterministic execute for %q", expr)
+		}
+	}
+}
+
+func TestPropertyMarshalRoundtrip(t *testing.T) {
+	schema := propertySchema()
+	rng := rand.New(rand.NewPCG(42, 0))
+
+	for range 1000 {
+		expr := randomAST(rng, 2+rng.IntN(3))
+		f, err := Compile(expr, schema)
+		if err != nil {
+			continue
+		}
+		data, err := f.MarshalBinary()
+		require.NoError(t, err, "marshal failed for %q", expr)
+
+		restored := &Filter{}
+		require.NoError(t, restored.UnmarshalBinary(data), "unmarshal failed for %q", expr)
+		assert.Equal(t, f.Hash(), restored.Hash(), "hash mismatch after roundtrip for %q", expr)
+
+		ctx := propertyContext(rng)
+		r1, e1 := f.Execute(ctx)
+		r2, e2 := restored.Execute(ctx)
+		if (e1 == nil) != (e2 == nil) || r1 != r2 {
+			t.Fatalf("execution mismatch after roundtrip for %q", expr)
+		}
+	}
+}
+
+func TestPropertySchemaValidationConsistency(t *testing.T) {
+	schema := propertySchema()
+	rng := rand.New(rand.NewPCG(42, 0))
+
+	for range 1000 {
+		expr := randomAST(rng, 2+rng.IntN(3))
+		f, err := Compile(expr, schema)
+		if err != nil {
+			continue
+		}
+		fNoSchema, err := Compile(expr, nil)
+		require.NoError(t, err, "compiles with schema but not without for %q", expr)
+
+		ctx := propertyContext(rng)
+		r1, _ := f.Execute(ctx)
+		r2, _ := fNoSchema.Execute(ctx)
+		assert.Equal(t, r1, r2, "schema/no-schema execution mismatch for %q", expr)
+	}
+}
+
+func TestPropertyNilContextSafe(_ *testing.T) {
+	schema := propertySchema()
+	rng := rand.New(rand.NewPCG(42, 0))
+
+	for range 1000 {
+		expr := randomAST(rng, 2+rng.IntN(3))
+		f, err := Compile(expr, schema)
+		if err != nil {
+			continue
+		}
+		_, _ = f.Execute(nil)
+		_, _ = f.Execute(NewExecutionContext())
+	}
+}
+
+func TestPropertyBoolResult(t *testing.T) {
+	schema := propertySchema()
+	rng := rand.New(rand.NewPCG(42, 0))
+
+	for range 1000 {
+		expr := randomAST(rng, 2+rng.IntN(3))
+		f, err := Compile(expr, schema)
+		if err != nil {
+			continue
+		}
+		ctx := propertyContext(rng)
+		result, err := f.Execute(ctx)
+		if err != nil {
+			continue
+		}
+		assert.IsType(t, true, result, "Execute returned non-bool for %q", expr)
+	}
+}
+
+func TestPropertyNotInvertsTruthiness(t *testing.T) {
+	schema := propertySchema()
+	rng := rand.New(rand.NewPCG(42, 0))
+
+	for range 500 {
+		inner := randomAST(rng, 1+rng.IntN(2))
+		fPos, errPos := Compile(inner, schema)
+		fNeg, errNeg := Compile(fmt.Sprintf("not (%s)", inner), schema)
+		if errPos != nil || errNeg != nil {
+			continue
+		}
+		ctx := propertyContext(rng)
+		rPos, ePos := fPos.Execute(ctx)
+		rNeg, eNeg := fNeg.Execute(ctx)
+		if ePos != nil || eNeg != nil {
+			continue
+		}
+		assert.NotEqual(t, rPos, rNeg, "not(...) did not invert for %q", inner)
+	}
+}
+
+func TestPropertyIdempotentDoubleNegation(t *testing.T) {
+	schema := propertySchema()
+	rng := rand.New(rand.NewPCG(42, 0))
+
+	for range 500 {
+		inner := randomAST(rng, 1+rng.IntN(2))
+		fSingle, errS := Compile(inner, schema)
+		fDouble, errD := Compile(fmt.Sprintf("not not (%s)", inner), schema)
+		if errS != nil || errD != nil {
+			continue
+		}
+		ctx := propertyContext(rng)
+		rSingle, eSingle := fSingle.Execute(ctx)
+		rDouble, eDouble := fDouble.Execute(ctx)
+		if eSingle != nil || eDouble != nil {
+			continue
+		}
+		assert.Equal(t, rSingle, rDouble, "not not X != X for %q", inner)
+	}
+}
+
+func TestPropertyLogicalOperators(t *testing.T) {
+	schema := propertySchema()
+
+	tests := []struct {
+		name string
+		op   string
+		eval func(a, b bool) bool
+	}{
+		{"or", "or", func(a, b bool) bool { return a || b }},
+		{"and", "and", func(a, b bool) bool { return a && b }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rng := rand.New(rand.NewPCG(42, 0))
+			for range 500 {
+				left := randomAST(rng, 1+rng.IntN(2))
+				right := randomAST(rng, 1+rng.IntN(2))
+				combined := fmt.Sprintf("(%s) %s (%s)", left, tt.op, right)
+
+				fC, errC := Compile(combined, schema)
+				fL, errL := Compile(left, schema)
+				fR, errR := Compile(right, schema)
+				if errC != nil || errL != nil || errR != nil {
+					continue
+				}
+				ctx := propertyContext(rng)
+				rC, eC := fC.Execute(ctx)
+				rL, eL := fL.Execute(ctx)
+				rR, eR := fR.Execute(ctx)
+				if eC != nil || eL != nil || eR != nil {
+					continue
+				}
+				expected := tt.eval(rL, rR)
+				assert.Equal(t, expected, rC,
+					"%s semantics broken for (%s) %s (%s)", tt.op, left, tt.op, right)
+			}
+		})
+	}
+}
+
+func TestPropertyEqNeComplement(t *testing.T) {
+	schema := propertySchema()
+	rng := rand.New(rand.NewPCG(42, 0))
+
+	for range 500 {
+		field := randomField(rng)
+		word := randomWord(rng)
+		fEq, errEq := Compile(fmt.Sprintf("%s == \"%s\"", field, word), schema)
+		fNe, errNe := Compile(fmt.Sprintf("%s != \"%s\"", field, word), schema)
+		if errEq != nil || errNe != nil {
+			continue
+		}
+		ctx := propertyContext(rng)
+		rEq, eEq := fEq.Execute(ctx)
+		rNe, eNe := fNe.Execute(ctx)
+		if eEq != nil || eNe != nil {
+			continue
+		}
+		assert.NotEqual(t, rEq, rNe, "== and != same result for %s \"%s\"", field, word)
+	}
+}
+
+func TestPropertyIntRangeContainment(t *testing.T) {
+	rng := rand.New(rand.NewPCG(42, 0))
+
+	for range 500 {
+		lo := rng.IntN(500)
+		hi := lo + 1 + rng.IntN(500)
+		val := int64(lo + rng.IntN(hi-lo+1))
+
+		f, err := Compile(fmt.Sprintf("x in {%d..%d}", lo, hi), nil)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().SetIntField("x", val)
+		result, err := f.Execute(ctx)
+		require.NoError(t, err)
+		assert.True(t, result, "x=%d should be in {%d..%d}", val, lo, hi)
+
+		outside := int64(hi + 1 + rng.IntN(100))
+		ctx2 := NewExecutionContext().SetIntField("x", outside)
+		result2, _ := f.Execute(ctx2)
+		assert.False(t, result2, "x=%d should NOT be in {%d..%d}", outside, lo, hi)
+	}
+}
+
+func TestPropertyTimeRangeContainment(t *testing.T) {
+	rng := rand.New(rand.NewPCG(42, 0))
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	for range 200 {
+		startOff := rng.IntN(365 * 24)
+		endOff := startOff + 1 + rng.IntN(24*30)
+		start := base.Add(time.Duration(startOff) * time.Hour)
+		end := base.Add(time.Duration(endOff) * time.Hour)
+		mid := start.Add(end.Sub(start) / 2)
+
+		f, err := Compile(fmt.Sprintf("ts in {%s..%s}", start.Format(time.RFC3339), end.Format(time.RFC3339)), nil)
+		if err != nil {
+			continue
+		}
+		ctx := NewExecutionContext().SetTimeField("ts", mid)
+		result, _ := f.Execute(ctx)
+		assert.True(t, result, "ts=%s should be in {%s..%s}",
+			mid.Format(time.RFC3339), start.Format(time.RFC3339), end.Format(time.RFC3339))
+	}
 }

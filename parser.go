@@ -76,11 +76,14 @@ func (p *Parser) Errors() []string {
 	return p.errors
 }
 
-func (p *Parser) addError(format string, args ...interface{}) {
+func (p *Parser) addError(format string, args ...any) {
 	p.errors = append(p.errors, fmt.Sprintf(format, args...))
 }
 
 // Parse parses the input and returns an expression tree.
+// Returns an error if parsing fails or if there is trailing input.
+// Parse parses the input and returns an expression tree.
+// Collects multiple errors when possible via synchronization recovery.
 // Returns an error if parsing fails or if there is trailing input.
 func (p *Parser) Parse() (Expression, error) {
 	expr := p.parseExpression(LOWEST)
@@ -107,12 +110,12 @@ func (p *Parser) parseExpression(precedence int) Expression {
 
 	switch p.curToken.Type {
 	case TokenError:
-		// Propagate lexer error
 		if errMsg, ok := p.curToken.Value.(string); ok {
 			p.addError("lexer error: %s", errMsg)
 		} else {
 			p.addError("lexer error at: %s", p.curToken.Literal)
 		}
+		p.synchronize()
 		return nil
 	case TokenNot:
 		left = p.parseUnaryExpression()
@@ -120,23 +123,8 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		left = p.parseGroupedExpression()
 	case TokenIdent:
 		left = p.parseFieldExpression()
-	case TokenString:
-		left = p.parseLiteralExpression()
-	case TokenRawString:
-		left = p.parseLiteralExpression()
-	case TokenInt:
-		left = p.parseLiteralExpression()
-	case TokenFloat:
-		left = p.parseLiteralExpression()
-	case TokenBool:
-		left = p.parseLiteralExpression()
-	case TokenIP:
-		left = p.parseLiteralExpression()
-	case TokenCIDR:
-		left = p.parseLiteralExpression()
-	case TokenTime:
-		left = p.parseLiteralExpression()
-	case TokenDuration:
+	case TokenString, TokenRawString, TokenInt, TokenFloat, TokenBool,
+		TokenIP, TokenCIDR, TokenTime, TokenDuration:
 		left = p.parseLiteralExpression()
 	case TokenListRef:
 		left = p.parseListRefExpression()
@@ -145,6 +133,7 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		}
 	default:
 		p.addError("unexpected token: %s", p.curToken.Type)
+		p.synchronize()
 		return nil
 	}
 
@@ -154,6 +143,20 @@ func (p *Parser) parseExpression(precedence int) Expression {
 	}
 
 	return left
+}
+
+// synchronize skips tokens until the parser reaches a safe restart point.
+// This enables multi-error reporting by recovering from parse failures.
+func (p *Parser) synchronize() {
+	for p.peekToken.Type != TokenEOF {
+		switch p.peekToken.Type {
+		case TokenAnd, TokenOr, TokenXor:
+			return
+		case TokenRParen, TokenRBrace, TokenRBracket:
+			return
+		}
+		p.nextToken()
+	}
 }
 
 func (p *Parser) parseUnaryExpression() Expression {
@@ -171,7 +174,8 @@ func (p *Parser) parseGroupedExpression() Expression {
 	expr := p.parseExpression(LOWEST)
 	if p.peekToken.Type != TokenRParen {
 		p.addError("expected ), got %s", p.peekToken.Type)
-		return nil
+		p.synchronize()
+		return expr
 	}
 	p.nextToken()
 	return expr
@@ -224,7 +228,8 @@ func (p *Parser) parseFunctionCallExpression(name string) Expression {
 
 	if p.peekToken.Type != TokenRParen {
 		p.addError("expected ), got %s", p.peekToken.Type)
-		return nil
+		p.synchronize()
+		return &FunctionCallExpr{Name: name, Arguments: args}
 	}
 	p.nextToken() // consume ')'
 
@@ -240,7 +245,8 @@ func (p *Parser) parseIndexExpression(object Expression) Expression {
 	if p.curToken.Type == TokenAsterisk {
 		if p.peekToken.Type != TokenRBracket {
 			p.addError("expected ], got %s", p.peekToken.Type)
-			return nil
+			p.synchronize()
+			return &UnpackExpr{Array: object}
 		}
 		p.nextToken() // consume ]
 		return &UnpackExpr{Array: object}
@@ -255,12 +261,14 @@ func (p *Parser) parseIndexExpression(object Expression) Expression {
 		index = p.parseFieldExpression()
 	default:
 		p.addError("index must be a literal or field reference, got %s", p.curToken.Type)
-		return nil
+		p.synchronize()
+		return object
 	}
 
 	if p.peekToken.Type != TokenRBracket {
 		p.addError("expected ], got %s", p.peekToken.Type)
-		return nil
+		p.synchronize()
+		return &IndexExpr{Object: object, Index: index}
 	}
 	p.nextToken() // consume ]
 
@@ -399,7 +407,8 @@ func (p *Parser) parseArrayExpression() Expression {
 
 	if p.peekToken.Type != TokenRBrace {
 		p.addError("expected }, got %s", p.peekToken.Type)
-		return nil
+		p.synchronize()
+		return &ArrayExpr{Elements: elements}
 	}
 
 	p.nextToken()
