@@ -9,7 +9,6 @@ import (
 	"net"
 	"regexp"
 	"sync"
-	"time"
 )
 
 // Binary encoding format:
@@ -264,7 +263,7 @@ func (w *encWriter) writeValue(v Value) error {
 
 	case TimeValue:
 		w.writeByte(valTypeTime)
-		w.writeVarint(val.Time.UnixNano())
+		w.writeVarint(int64(val))
 
 	case DurationValue:
 		w.writeByte(valTypeDuration)
@@ -537,7 +536,7 @@ func (r *decReader) readValue() (Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		return TimeValue{Time: time.Unix(0, ns).UTC()}, nil
+		return TimeValue(ns), nil
 
 	case valTypeDuration:
 		d, err := r.readVarint()

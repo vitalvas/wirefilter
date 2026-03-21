@@ -371,13 +371,13 @@ func (f *Filter) evaluateEquality(left, right Value) (Value, error) {
 		if err != nil {
 			return BoolValue(false), nil
 		}
-		right = TimeValue{Time: t}
+		right = NewTimeValue(t)
 	case left.Type() == TypeString && right.Type() == TypeTime:
 		t, err := time.Parse(time.RFC3339Nano, string(left.(StringValue)))
 		if err != nil {
 			return BoolValue(false), nil
 		}
-		left = TimeValue{Time: t}
+		left = NewTimeValue(t)
 	}
 	return BoolValue(left.Equal(right)), nil
 }
@@ -389,8 +389,7 @@ func (f *Filter) evaluateComparison(left, right Value, cmp func(int64, int64) bo
 
 	// Time vs time comparison
 	if left.Type() == TypeTime && right.Type() == TypeTime {
-		diff := left.(TimeValue).Time.Sub(right.(TimeValue).Time)
-		return BoolValue(cmp(int64(diff), 0)), nil
+		return BoolValue(cmp(int64(left.(TimeValue))-int64(right.(TimeValue)), 0)), nil
 	}
 
 	// Duration vs duration comparison
@@ -504,13 +503,12 @@ func (f *Filter) evaluateTemporalArithmetic(left, right Value, op TokenType) (Va
 
 	// duration + time = time (commutative addition only)
 	if lt == TypeDuration && rt == TypeTime && op == TokenPlus {
-		d := time.Duration(left.(DurationValue))
-		return TimeValue{Time: right.(TimeValue).Time.Add(d)}, true
+		return TimeValue(int64(right.(TimeValue)) + int64(left.(DurationValue))), true
 	}
 
 	// time - time = duration
 	if lt == TypeTime && rt == TypeTime && op == TokenMinus {
-		return DurationValue(left.(TimeValue).Time.Sub(right.(TimeValue).Time)), true
+		return DurationValue(int64(left.(TimeValue)) - int64(right.(TimeValue))), true
 	}
 
 	// duration op duration
@@ -532,12 +530,11 @@ func (f *Filter) evaluateTemporalArithmetic(left, right Value, op TokenType) (Va
 }
 
 func evalTimeAndDuration(tv TimeValue, dv DurationValue, op TokenType) (Value, bool) {
-	d := time.Duration(dv)
 	switch op {
 	case TokenPlus:
-		return TimeValue{Time: tv.Time.Add(d)}, true
+		return TimeValue(int64(tv) + int64(dv)), true
 	case TokenMinus:
-		return TimeValue{Time: tv.Time.Add(-d)}, true
+		return TimeValue(int64(tv) - int64(dv)), true
 	}
 	return nil, true
 }

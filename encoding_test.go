@@ -817,6 +817,14 @@ func FuzzMarshalUnmarshal(f *testing.F) {
 	f.Add(`maintenance() == true`)
 	f.Add(`get_score(name) > 5.0`)
 	f.Add(`is_tor(ip) and name == "test"`)
+	f.Add(`ts >= 2026-03-19T10:00:00Z`)
+	f.Add(`ttl == 30m`)
+	f.Add(`ts + 1h >= 2026-03-19T11:00:00Z`)
+	f.Add(`ttl * 2 > 1h`)
+	f.Add(`ts in {2026-03-19T00:00:00Z..2026-03-20T00:00:00Z}`)
+	f.Add(`ttl in {1h..3h}`)
+	f.Add(`ts <= now()`)
+	f.Add(`ttl >= 2d4h30m15s`)
 
 	f.Fuzz(func(t *testing.T, expr string) {
 		filter, err := Compile(expr, nil)
@@ -855,6 +863,9 @@ func FuzzMarshalUnmarshal(f *testing.F) {
 			SetList("names", []string{"test"}).
 			SetIPList("blocked", []string{"10.0.0.0/8"}).
 			SetTable("geo", map[string]string{"10.0.0.1": "US"}).
+			SetTimeField("ts", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)).
+			SetDurationField("ttl", time.Hour).
+			WithNow(func() time.Time { return time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC) }).
 			SetFunc("maintenance", func(_ context.Context, _ []Value) (Value, error) {
 				return BoolValue(true), nil
 			}).

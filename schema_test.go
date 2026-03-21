@@ -904,3 +904,73 @@ func TestSchemaTimeAndDuration(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestDisableRegex(t *testing.T) {
+	schema := NewSchema().
+		AddField("name", TypeString).
+		AddField("path", TypeString).
+		DisableRegex()
+
+	t.Run("matches operator blocked", func(t *testing.T) {
+		_, err := Compile(`name matches "^test"`, schema)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "regex is disabled")
+	})
+
+	t.Run("tilde alias blocked", func(t *testing.T) {
+		_, err := Compile(`name ~ "^test"`, schema)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "regex is disabled")
+	})
+
+	t.Run("regex_replace blocked", func(t *testing.T) {
+		_, err := Compile(`regex_replace(name, "[0-9]+", "X") == "X"`, schema)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "regex is disabled")
+	})
+
+	t.Run("regex_extract blocked", func(t *testing.T) {
+		_, err := Compile(`regex_extract(path, "/v[0-9]+/") == ""`, schema)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "regex is disabled")
+	})
+
+	t.Run("contains_word blocked", func(t *testing.T) {
+		_, err := Compile(`contains_word(name, "admin")`, schema)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "regex is disabled")
+	})
+
+	t.Run("wildcard still allowed", func(t *testing.T) {
+		_, err := Compile(`name wildcard "*.example.com"`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("strict wildcard still allowed", func(t *testing.T) {
+		_, err := Compile(`name strict wildcard "*.Example.com"`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("contains still allowed", func(t *testing.T) {
+		_, err := Compile(`name contains "test"`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("equality still allowed", func(t *testing.T) {
+		_, err := Compile(`name == "test"`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("other functions still allowed", func(t *testing.T) {
+		_, err := Compile(`lower(name) == "test"`, schema)
+		assert.NoError(t, err)
+	})
+
+	t.Run("regex allowed without flag", func(t *testing.T) {
+		noFlag := NewSchema().AddField("name", TypeString)
+		_, err := Compile(`name matches "^test"`, noFlag)
+		assert.NoError(t, err)
+		_, err = Compile(`regex_replace(name, "a", "b") == "x"`, noFlag)
+		assert.NoError(t, err)
+	})
+}

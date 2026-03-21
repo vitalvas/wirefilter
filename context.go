@@ -111,7 +111,7 @@ func (ctx *ExecutionContext) SetBytesField(name string, value []byte) *Execution
 // SetTimeField sets a time field value in the execution context.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetTimeField(name string, value time.Time) *ExecutionContext {
-	ctx.fields[name] = TimeValue{Time: value.UTC()}
+	ctx.fields[name] = NewTimeValue(value.UTC())
 	return ctx
 }
 
@@ -487,7 +487,7 @@ func exportValue(v Value) any {
 	case BytesValue:
 		return string(val)
 	case TimeValue:
-		return val.Time.Format(time.RFC3339Nano)
+		return val.GoTime().Format(time.RFC3339Nano)
 	case DurationValue:
 		return val.String()
 	case ArrayValue:

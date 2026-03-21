@@ -45,6 +45,48 @@ func BenchmarkValueOperations(b *testing.B) {
 			arr.Contains(val)
 		}
 	})
+
+	b.Run("time equality", func(b *testing.B) {
+		t1 := NewTimeValue(time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+		t2 := NewTimeValue(time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+		b.ReportAllocs()
+		for b.Loop() {
+			t1.Equal(t2)
+		}
+	})
+
+	b.Run("duration equality", func(b *testing.B) {
+		d1 := DurationValue(time.Hour)
+		d2 := DurationValue(time.Hour)
+		b.ReportAllocs()
+		for b.Loop() {
+			d1.Equal(d2)
+		}
+	})
+
+	b.Run("interval contains time", func(b *testing.B) {
+		iv := IntervalValue{
+			Start: NewTimeValue(time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)),
+			End:   NewTimeValue(time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC)),
+		}
+		v := NewTimeValue(time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC))
+		b.ReportAllocs()
+		for b.Loop() {
+			iv.Contains(v)
+		}
+	})
+
+	b.Run("interval contains duration", func(b *testing.B) {
+		iv := IntervalValue{
+			Start: DurationValue(time.Hour),
+			End:   DurationValue(3 * time.Hour),
+		}
+		v := DurationValue(2 * time.Hour)
+		b.ReportAllocs()
+		for b.Loop() {
+			iv.Contains(v)
+		}
+	})
 }
 
 func BenchmarkIPOperations(b *testing.B) {
@@ -699,25 +741,25 @@ func TestTimeValue(t *testing.T) {
 	t3 := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
 
 	t.Run("type", func(t *testing.T) {
-		assert.Equal(t, TypeTime, TimeValue{Time: t1}.Type())
+		assert.Equal(t, TypeTime, NewTimeValue(t1).Type())
 	})
 
 	t.Run("string", func(t *testing.T) {
-		v := TimeValue{Time: t1}
+		v := NewTimeValue(t1)
 		assert.Equal(t, "2026-03-19T10:00:00Z", v.String())
 	})
 
 	t.Run("truthy", func(t *testing.T) {
-		assert.True(t, TimeValue{Time: t1}.IsTruthy())
+		assert.True(t, NewTimeValue(t1).IsTruthy())
 	})
 
 	t.Run("equal", func(t *testing.T) {
-		assert.True(t, TimeValue{Time: t1}.Equal(TimeValue{Time: t2}))
-		assert.False(t, TimeValue{Time: t1}.Equal(TimeValue{Time: t3}))
+		assert.True(t, NewTimeValue(t1).Equal(NewTimeValue(t2)))
+		assert.False(t, NewTimeValue(t1).Equal(NewTimeValue(t3)))
 	})
 
 	t.Run("not equal different type", func(t *testing.T) {
-		assert.False(t, TimeValue{Time: t1}.Equal(StringValue("test")))
+		assert.False(t, NewTimeValue(t1).Equal(StringValue("test")))
 	})
 
 	t.Run("type string", func(t *testing.T) {
@@ -768,18 +810,18 @@ func TestIntervalValue(t *testing.T) {
 
 	t.Run("time interval contains", func(t *testing.T) {
 		iv := IntervalValue{
-			Start: TimeValue{Time: t1},
-			End:   TimeValue{Time: t2},
+			Start: NewTimeValue(t1),
+			End:   NewTimeValue(t2),
 		}
 		mid := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
 		before := time.Date(2026, 3, 18, 0, 0, 0, 0, time.UTC)
 		after := time.Date(2026, 3, 21, 0, 0, 0, 0, time.UTC)
 
-		assert.True(t, iv.Contains(TimeValue{Time: mid}))
-		assert.True(t, iv.Contains(TimeValue{Time: t1}))
-		assert.True(t, iv.Contains(TimeValue{Time: t2}))
-		assert.False(t, iv.Contains(TimeValue{Time: before}))
-		assert.False(t, iv.Contains(TimeValue{Time: after}))
+		assert.True(t, iv.Contains(NewTimeValue(mid)))
+		assert.True(t, iv.Contains(NewTimeValue(t1)))
+		assert.True(t, iv.Contains(NewTimeValue(t2)))
+		assert.False(t, iv.Contains(NewTimeValue(before)))
+		assert.False(t, iv.Contains(NewTimeValue(after)))
 		assert.False(t, iv.Contains(IntValue(42)))
 	})
 

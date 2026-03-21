@@ -1284,7 +1284,7 @@ func TestContextTimeAndDuration(t *testing.T) {
 		val, ok := ctx.GetField("ts")
 		assert.True(t, ok)
 		assert.Equal(t, TypeTime, val.Type())
-		assert.True(t, now.Equal(val.(TimeValue).Time))
+		assert.True(t, now.Equal(val.(TimeValue).GoTime()))
 	})
 
 	t.Run("SetDurationField", func(t *testing.T) {

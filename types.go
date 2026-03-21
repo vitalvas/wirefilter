@@ -286,19 +286,28 @@ func (m MapValue) Get(key string) (Value, bool) {
 	return val, ok
 }
 
-// TimeValue represents a point in time.
-type TimeValue struct {
-	Time time.Time
+// TimeValue represents a point in time stored as nanoseconds since Unix epoch.
+// Using int64 internally avoids heap allocations when boxed as a Value interface.
+type TimeValue int64
+
+// NewTimeValue creates a TimeValue from a time.Time.
+func NewTimeValue(t time.Time) TimeValue {
+	return TimeValue(t.UnixNano())
+}
+
+// GoTime converts the TimeValue back to a time.Time in UTC.
+func (t TimeValue) GoTime() time.Time {
+	return time.Unix(0, int64(t)).UTC()
 }
 
 func (t TimeValue) Type() Type     { return TypeTime }
 func (t TimeValue) IsTruthy() bool { return true }
-func (t TimeValue) String() string { return t.Time.Format(time.RFC3339Nano) }
+func (t TimeValue) String() string { return t.GoTime().Format(time.RFC3339Nano) }
 func (t TimeValue) Equal(v Value) bool {
 	if v.Type() != TypeTime {
 		return false
 	}
-	return t.Time.Equal(v.(TimeValue).Time)
+	return int64(t) == int64(v.(TimeValue))
 }
 
 // DurationValue represents a duration of time.
@@ -380,10 +389,10 @@ func (iv IntervalValue) Contains(v Value) bool {
 		if v.Type() != TypeTime {
 			return false
 		}
-		t := v.(TimeValue).Time
-		start := iv.Start.(TimeValue).Time
-		end := iv.End.(TimeValue).Time
-		return !t.Before(start) && !t.After(end)
+		t := int64(v.(TimeValue))
+		start := int64(iv.Start.(TimeValue))
+		end := int64(iv.End.(TimeValue))
+		return t >= start && t <= end
 	case TypeDuration:
 		if v.Type() != TypeDuration {
 			return false

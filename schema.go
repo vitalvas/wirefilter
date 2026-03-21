@@ -46,6 +46,7 @@ type Schema struct {
 	customFuncs   map[string]FuncSignature // registered user-defined functions
 	maxDepth      int                      // max AST nesting depth (0 = unlimited)
 	maxNodes      int                      // max AST node count (0 = unlimited)
+	regexDisabled bool                     // disables matches/~ operator and regex functions
 }
 
 // operatorsByType defines which operators are valid for each field type.
@@ -232,6 +233,15 @@ func (s *Schema) SetMaxNodes(nodes int) *Schema {
 	return s
 }
 
+// DisableRegex disables the matches/~ operator and regex-based functions
+// (regex_replace, regex_extract, contains_word).
+// Wildcard matching is not affected.
+// Returns the schema to allow method chaining.
+func (s *Schema) DisableRegex() *Schema {
+	s.regexDisabled = true
+	return s
+}
+
 // AddField adds a field to the schema with the specified name and type.
 // Returns the schema to allow method chaining.
 func (s *Schema) AddField(name string, fieldType Type) *Schema {
@@ -350,6 +360,9 @@ func (v *validator) validate(expr Expression, depth int) error {
 		if !v.schema.IsFunctionAllowed(e.Name) {
 			return fmt.Errorf("function not allowed: %s", e.Name)
 		}
+		if v.schema.regexDisabled && regexFunctions[strings.ToLower(e.Name)] {
+			return fmt.Errorf("regex is disabled: function %s is not allowed", e.Name)
+		}
 		for _, arg := range e.Arguments {
 			if err := v.validate(arg, depth); err != nil {
 				return err
@@ -391,11 +404,22 @@ func (v *validator) validateFuncArgs(expr *FunctionCallExpr) error {
 // validateOperatorType checks that the operator in a binary expression is valid
 // for the field type on the left side. This is only checked when the left side
 // is a FieldExpr or UnpackExpr with a known field type.
+// regexFunctions is the set of function names that require regex support.
+var regexFunctions = map[string]bool{
+	"regex_replace": true,
+	"regex_extract": true,
+	"contains_word": true,
+}
+
 func (v *validator) validateOperatorType(expr *BinaryExpr) error {
 	// Skip logical operators - they work on any type
 	switch expr.Operator {
 	case TokenAnd, TokenOr, TokenXor:
 		return nil
+	}
+
+	if v.schema.regexDisabled && expr.Operator == TokenMatches {
+		return fmt.Errorf("regex is disabled: matches operator is not allowed")
 	}
 
 	fieldType, ok := v.resolveFieldType(expr.Left)

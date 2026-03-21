@@ -3,6 +3,7 @@ package wirefilter
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +63,9 @@ func BenchmarkExecute(b *testing.B) {
 		AddField("http.host", TypeString).
 		AddField("http.status", TypeInt).
 		AddField("http.path", TypeString).
-		AddField("ip.src", TypeIP)
+		AddField("ip.src", TypeIP).
+		AddField("created_at", TypeTime).
+		AddField("ttl", TypeDuration)
 
 	tests := []struct {
 		name       string
@@ -133,6 +136,56 @@ func BenchmarkExecute(b *testing.B) {
 			setup: func() *ExecutionContext {
 				return NewExecutionContext().
 					SetIntField("http.status", 250)
+			},
+		},
+		{
+			name:       "time comparison",
+			expression: `created_at >= 2026-03-19T10:00:00Z`,
+			setup: func() *ExecutionContext {
+				return NewExecutionContext().
+					SetTimeField("created_at", time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC))
+			},
+		},
+		{
+			name:       "time arithmetic",
+			expression: `created_at + 1h >= 2026-03-19T11:00:00Z`,
+			setup: func() *ExecutionContext {
+				return NewExecutionContext().
+					SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC))
+			},
+		},
+		{
+			name:       "now function",
+			expression: `created_at <= now()`,
+			setup: func() *ExecutionContext {
+				fixed := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+				return NewExecutionContext().
+					SetTimeField("created_at", time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)).
+					WithNow(func() time.Time { return fixed })
+			},
+		},
+		{
+			name:       "duration comparison",
+			expression: `ttl >= 30m`,
+			setup: func() *ExecutionContext {
+				return NewExecutionContext().
+					SetDurationField("ttl", time.Hour)
+			},
+		},
+		{
+			name:       "duration arithmetic",
+			expression: `ttl * 2 > 1h`,
+			setup: func() *ExecutionContext {
+				return NewExecutionContext().
+					SetDurationField("ttl", 45*time.Minute)
+			},
+		},
+		{
+			name:       "time range membership",
+			expression: `created_at in {2026-03-19T00:00:00Z..2026-03-20T00:00:00Z}`,
+			setup: func() *ExecutionContext {
+				return NewExecutionContext().
+					SetTimeField("created_at", time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC))
 			},
 		},
 	}
@@ -273,6 +326,20 @@ func FuzzCompile(f *testing.F) {
 	f.Add(`x * 2 == 10`)
 	f.Add(`x / 3 == 1`)
 	f.Add(`x % 2 == 0`)
+	f.Add(`ts >= 2026-03-19T10:00:00Z`)
+	f.Add(`ts + 1h >= 2026-03-19T11:00:00Z`)
+	f.Add(`ts - 30m <= now()`)
+	f.Add(`ts in {2026-03-19T00:00:00Z..2026-03-20T00:00:00Z}`)
+	f.Add(`ttl == 30m`)
+	f.Add(`ttl >= 2d4h30m15s`)
+	f.Add(`ttl * 2 > 1h`)
+	f.Add(`ttl / 30m == 2`)
+	f.Add(`ttl % 1h == 30m`)
+	f.Add(`ttl in {1h..3h}`)
+	f.Add(`ts <= now()`)
+	f.Add(`ts >= now() - 1h`)
+	f.Add(`ts == "2026-03-19T10:00:00Z"`)
+	f.Add(`1h + ts >= 2026-03-19T11:00:00Z`)
 
 	f.Fuzz(func(t *testing.T, input string) {
 		f1, err1 := Compile(input, nil)
@@ -292,12 +359,16 @@ func FuzzCompile(f *testing.F) {
 		}
 
 		// Execution determinism
+		fixed := time.Date(2026, 3, 19, 10, 0, 0, 0, time.UTC)
 		ctx := NewExecutionContext().
 			SetStringField("name", "test").
 			SetIntField("x", 5).
 			SetBoolField("active", true).
 			SetIPField("ip", "10.0.0.1").
-			SetArrayField("tags", []string{"a", "b"})
+			SetArrayField("tags", []string{"a", "b"}).
+			SetTimeField("ts", fixed).
+			SetDurationField("ttl", time.Hour).
+			WithNow(func() time.Time { return fixed })
 		r1, e1 := f1.Execute(ctx)
 		r2, e2 := f2.Execute(ctx)
 		if (e1 == nil) != (e2 == nil) || r1 != r2 {
@@ -330,6 +401,39 @@ func FuzzExecute(f *testing.F) {
 			SetIntField("http.status", status)
 
 		// Determinism: execute twice, same result
+		r1, e1 := filter.Execute(ctx)
+		r2, e2 := filter.Execute(ctx)
+		if (e1 == nil) != (e2 == nil) || r1 != r2 {
+			t.Fatalf("non-deterministic execute for %q", expression)
+		}
+	})
+}
+
+func FuzzExecuteTimeDuration(f *testing.F) {
+	f.Add(`ts >= 2026-03-19T10:00:00Z`, int64(1742554800000000000), int64(3600000000000))
+	f.Add(`ts + 1h >= 2026-03-19T11:00:00Z`, int64(1742554800000000000), int64(3600000000000))
+	f.Add(`ttl == 30m`, int64(1742554800000000000), int64(1800000000000))
+	f.Add(`ttl * 2 > 1h`, int64(1742554800000000000), int64(2700000000000))
+	f.Add(`ts <= now()`, int64(1742554800000000000), int64(3600000000000))
+	f.Add(`ttl in {1h..3h}`, int64(1742554800000000000), int64(7200000000000))
+	f.Add(`ts >= now() - 1h`, int64(1742554800000000000), int64(3600000000000))
+
+	schema := NewSchema().
+		AddField("ts", TypeTime).
+		AddField("ttl", TypeDuration)
+
+	f.Fuzz(func(t *testing.T, expression string, tsNano int64, ttlNano int64) {
+		filter, err := Compile(expression, schema)
+		if err != nil {
+			return
+		}
+
+		fixed := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+		ctx := NewExecutionContext().
+			SetTimeField("ts", time.Unix(0, tsNano).UTC()).
+			SetDurationField("ttl", time.Duration(ttlNano)).
+			WithNow(func() time.Time { return fixed })
+
 		r1, e1 := filter.Execute(ctx)
 		r2, e2 := filter.Execute(ctx)
 		if (e1 == nil) != (e2 == nil) || r1 != r2 {
@@ -372,6 +476,9 @@ func FuzzExecuteMultiType(f *testing.F) {
 			SetTable("geo", map[string]string{ipVal: "US", strVal1: strVal2}).
 			SetTableList("allowed", map[string][]string{strVal1: {strVal2}}).
 			SetTableIPList("blocked", map[string][]string{"office": {"10.0.0.0/8"}}).
+			SetTimeField("ts", time.Unix(intVal, 0).UTC()).
+			SetDurationField("ttl", time.Duration(intVal)*time.Second).
+			WithNow(func() time.Time { return time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC) }).
 			SetFunc("custom_func", func(_ context.Context, _ []Value) (Value, error) {
 				return BoolValue(true), nil
 			}).

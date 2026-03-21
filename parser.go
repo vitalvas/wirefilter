@@ -296,7 +296,7 @@ func (p *Parser) parseLiteralExpression() Expression {
 	case TokenCIDR:
 		value = CIDRValue{IPNet: p.curToken.Value.(*net.IPNet)}
 	case TokenTime:
-		value = TimeValue{Time: p.curToken.Value.(time.Time)}
+		value = NewTimeValue(p.curToken.Value.(time.Time))
 	case TokenDuration:
 		value = DurationValue(p.curToken.Value.(time.Duration))
 	}

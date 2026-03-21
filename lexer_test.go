@@ -28,6 +28,18 @@ func BenchmarkLexer(b *testing.B) {
 			name:  "range expression",
 			input: `port in {80..100, 443, 8000..9000}`,
 		},
+		{
+			name:  "timestamp literal",
+			input: `created_at >= 2026-03-19T10:00:00Z`,
+		},
+		{
+			name:  "duration literal",
+			input: `ttl >= 2d4h30m15s`,
+		},
+		{
+			name:  "temporal arithmetic",
+			input: `created_at + 1h >= now() - 30m`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -75,6 +87,17 @@ func FuzzLexer(f *testing.F) {
 	f.Add(`a xor b`)
 	f.Add(`cidr(ip, 24)`)
 	f.Add(`cidr6(ip, 64)`)
+	f.Add(`2026-03-19T10:00:00Z`)
+	f.Add(`2026-03-19T10:00:00.123456789Z`)
+	f.Add(`2026-03-19T10:00:00+05:00`)
+	f.Add(`30m`)
+	f.Add(`7d`)
+	f.Add(`1h30m`)
+	f.Add(`2d4h30m15s`)
+	f.Add(`5s`)
+	f.Add(`now()`)
+	f.Add(`ts >= 2026-03-19T00:00:00Z..2026-03-20T00:00:00Z`)
+	f.Add(`ttl in {1h..3h}`)
 
 	f.Fuzz(func(_ *testing.T, input string) {
 		lexer := NewLexer(input)

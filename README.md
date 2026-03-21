@@ -467,6 +467,30 @@ _, err = wirefilter.Compile(`concat(name, "!") == "test!"`, schema)
 Function names are case-insensitive.
 Disabling "lower" also disables "LOWER" and "Lower".
 
+### Disabling Regex
+
+Disable all regex functionality at compile time with `DisableRegex()`.
+This blocks the `matches`/`~` operator and regex-based functions
+(`regex_replace`, `regex_extract`, `contains_word`).
+Wildcard matching is not affected.
+
+```go
+schema := wirefilter.NewSchema().
+    AddField("name", wirefilter.TypeString).
+    DisableRegex()
+
+// These will fail at compile time:
+_, err := wirefilter.Compile(`name matches "^test"`, schema)
+// Error: regex is disabled: matches operator is not allowed
+
+_, err = wirefilter.Compile(`regex_replace(name, "[0-9]+", "X") == "X"`, schema)
+// Error: regex is disabled: function regex_replace is not allowed
+
+// These still work:
+_, err = wirefilter.Compile(`name wildcard "*.example.com"`, schema)  // OK
+_, err = wirefilter.Compile(`name contains "test"`, schema)           // OK
+```
+
 ### Type Validation
 
 When a schema is provided, the compiler validates that operators are compatible
