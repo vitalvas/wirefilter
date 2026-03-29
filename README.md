@@ -4,6 +4,10 @@ Wirefilter is a filtering expression language and execution engine for Go.
 It allows you to compile and evaluate filter expressions against runtime data,
 inspired by Cloudflare's Wirefilter.
 
+> [!NOTE]
+> Used in production as part of a policy engine, WAF, DNS application firewall,
+> and mail antispam engine handling over 1k RPS.
+
 ## Features
 
 - Logical operators: `and`, `or`, `not`, `xor`, `&&`, `||`, `!`, `^^` (short-circuit evaluation)
