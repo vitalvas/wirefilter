@@ -649,6 +649,23 @@ ctx := wirefilter.NewExecutionContext().
 
 All setter methods return `*ExecutionContext` for method chaining.
 
+#### Initializing with Field Maps
+
+Like `NewSchema`, `NewExecutionContext` accepts optional field maps for bulk initialization.
+Multiple maps can be provided and will be merged:
+
+```go
+ctx := wirefilter.NewExecutionContext(
+    map[string]wirefilter.Value{
+        "http.host":   wirefilter.StringValue("example.com"),
+        "http.status": wirefilter.IntValue(200),
+    },
+    map[string]wirefilter.Value{
+        "http.secure": wirefilter.BoolValue(true),
+    },
+)
+```
+
 For a generic value or custom type:
 
 ```go

@@ -46,13 +46,22 @@ type ExecutionContext struct {
 
 const defaultCacheMaxSize = 1024
 
-// NewExecutionContext creates a new empty execution context.
-func NewExecutionContext() *ExecutionContext {
-	return &ExecutionContext{
+// NewExecutionContext creates a new execution context.
+// If field maps are provided, initializes the context with those field values.
+// Multiple field maps can be provided and will be merged.
+// Otherwise, creates an empty context.
+func NewExecutionContext(fields ...map[string]Value) *ExecutionContext {
+	ctx := &ExecutionContext{
 		fields: make(map[string]Value),
 		lists:  make(map[string]ArrayValue),
 		tables: make(map[string]MapValue),
 	}
+	for _, fieldMap := range fields {
+		for name, value := range fieldMap {
+			ctx.fields[name] = value
+		}
+	}
+	return ctx
 }
 
 // SetField sets a field value in the execution context.

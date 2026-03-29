@@ -765,6 +765,53 @@ func TestExecuteWithCache(t *testing.T) {
 		ctx := NewExecutionContext().EnableCache().SetCacheMaxSize(0)
 		assert.Equal(t, defaultCacheMaxSize, ctx.cacheMaxSize)
 	})
+
+	t.Run("new context with field maps", func(t *testing.T) {
+		ctx := NewExecutionContext(map[string]Value{
+			"name":  StringValue("test"),
+			"count": IntValue(42),
+		})
+
+		val, ok := ctx.GetField("name")
+		require.True(t, ok)
+		assert.Equal(t, StringValue("test"), val)
+
+		val, ok = ctx.GetField("count")
+		require.True(t, ok)
+		assert.Equal(t, IntValue(42), val)
+	})
+
+	t.Run("new context with multiple field maps merged", func(t *testing.T) {
+		ctx := NewExecutionContext(
+			map[string]Value{"a": StringValue("first")},
+			map[string]Value{"b": IntValue(2)},
+		)
+
+		val, ok := ctx.GetField("a")
+		require.True(t, ok)
+		assert.Equal(t, StringValue("first"), val)
+
+		val, ok = ctx.GetField("b")
+		require.True(t, ok)
+		assert.Equal(t, IntValue(2), val)
+	})
+
+	t.Run("new context with overlapping maps last wins", func(t *testing.T) {
+		ctx := NewExecutionContext(
+			map[string]Value{"key": StringValue("old")},
+			map[string]Value{"key": StringValue("new")},
+		)
+
+		val, ok := ctx.GetField("key")
+		require.True(t, ok)
+		assert.Equal(t, StringValue("new"), val)
+	})
+
+	t.Run("new context with no maps is empty", func(t *testing.T) {
+		ctx := NewExecutionContext()
+		_, ok := ctx.GetField("anything")
+		assert.False(t, ok)
+	})
 }
 
 func TestExecutionContextExport(t *testing.T) {
