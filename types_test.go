@@ -781,6 +781,14 @@ func TestDurationValue(t *testing.T) {
 		assert.Equal(t, "5s", DurationValue(5*time.Second).String())
 	})
 
+	t.Run("string sub-second", func(t *testing.T) {
+		assert.Equal(t, "500ms", DurationValue(500*time.Millisecond).String())
+		assert.Equal(t, "100us", DurationValue(100*time.Microsecond).String())
+		assert.Equal(t, "50ns", DurationValue(50*time.Nanosecond).String())
+		assert.Equal(t, "1s500ms", DurationValue(time.Second+500*time.Millisecond).String())
+		assert.Equal(t, "1m500ms", DurationValue(time.Minute+500*time.Millisecond).String())
+	})
+
 	t.Run("truthy", func(t *testing.T) {
 		assert.True(t, DurationValue(time.Hour).IsTruthy())
 	})

@@ -2,6 +2,7 @@ package wirefilter
 
 import (
 	"encoding/hex"
+	"fmt"
 	"hash/fnv"
 	"net"
 	"regexp"
@@ -14,6 +15,15 @@ type RuleMeta struct {
 	ID   string
 	Tags map[string]string
 }
+
+// maxFilterCacheSize is the maximum number of entries in the regex and CIDR caches.
+// When the cache is full, new entries are not cached (existing entries are kept).
+const maxFilterCacheSize = 1024
+
+// maxEvalDepth is the maximum recursion depth during expression evaluation.
+// This prevents stack overflow from deeply nested expressions, especially
+// from UnmarshalBinary which bypasses schema validation.
+const maxEvalDepth = 256
 
 // Filter represents a compiled filter expression that can be executed against an execution context.
 // Filter is safe for concurrent use across goroutines.
@@ -123,7 +133,7 @@ func (f *Filter) Execute(ctx *ExecutionContext) (bool, error) {
 	expr := f.expr
 	f.mu.RUnlock()
 
-	result, err := f.evaluate(expr, ctx)
+	result, err := f.evaluate(expr, ctx, 0)
 	if err != nil {
 		return false, err
 	}
@@ -135,7 +145,12 @@ func (f *Filter) Execute(ctx *ExecutionContext) (bool, error) {
 	return result.IsTruthy(), nil
 }
 
-func (f *Filter) evaluate(expr Expression, ctx *ExecutionContext) (Value, error) {
+func (f *Filter) evaluate(expr Expression, ctx *ExecutionContext, depth int) (Value, error) {
+	depth++
+	if depth > maxEvalDepth {
+		return nil, fmt.Errorf("expression exceeds maximum evaluation depth of %d", maxEvalDepth)
+	}
+
 	// Check for context cancellation/timeout
 	if err := ctx.checkContext(); err != nil {
 		return nil, err
@@ -145,36 +160,36 @@ func (f *Filter) evaluate(expr Expression, ctx *ExecutionContext) (Value, error)
 	if ctx.traceEnabled() {
 		ctx.pushTrace(exprString(expr))
 		start := time.Now()
-		result, err := f.evaluateInner(expr, ctx)
+		result, err := f.evaluateInner(expr, ctx, depth)
 		ctx.popTrace(result, time.Since(start))
 		return result, err
 	}
 
-	return f.evaluateInner(expr, ctx)
+	return f.evaluateInner(expr, ctx, depth)
 }
 
-func (f *Filter) evaluateInner(expr Expression, ctx *ExecutionContext) (Value, error) {
+func (f *Filter) evaluateInner(expr Expression, ctx *ExecutionContext, depth int) (Value, error) {
 	switch e := expr.(type) {
 	case *BinaryExpr:
-		return f.evaluateBinaryExpr(e, ctx)
+		return f.evaluateBinaryExpr(e, ctx, depth)
 	case *UnaryExpr:
-		return f.evaluateUnaryExpr(e, ctx)
+		return f.evaluateUnaryExpr(e, ctx, depth)
 	case *FieldExpr:
 		return f.evaluateFieldExpr(e, ctx)
 	case *LiteralExpr:
 		return e.Value, nil
 	case *ArrayExpr:
-		return f.evaluateArrayExpr(e, ctx)
+		return f.evaluateArrayExpr(e, ctx, depth)
 	case *RangeExpr:
-		return f.evaluateRangeExpr(e, ctx)
+		return f.evaluateRangeExpr(e, ctx, depth)
 	case *IndexExpr:
-		return f.evaluateIndexExpr(e, ctx)
+		return f.evaluateIndexExpr(e, ctx, depth)
 	case *UnpackExpr:
-		return f.evaluateUnpackExpr(e, ctx)
+		return f.evaluateUnpackExpr(e, ctx, depth)
 	case *ListRefExpr:
 		return f.evaluateListRefExpr(e, ctx)
 	case *FunctionCallExpr:
-		return f.evaluateFunctionCall(e, ctx)
+		return f.evaluateFunctionCall(e, ctx, depth)
 	}
 	return nil, nil
 }

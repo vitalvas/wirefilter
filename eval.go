@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func (f *Filter) evaluateArrayExpr(expr *ArrayExpr, ctx *ExecutionContext) (Value, error) {
+func (f *Filter) evaluateArrayExpr(expr *ArrayExpr, ctx *ExecutionContext, depth int) (Value, error) {
 	var buf [8]Value
 	values := buf[:0]
 	if len(expr.Elements) > len(buf) {
@@ -17,7 +17,7 @@ func (f *Filter) evaluateArrayExpr(expr *ArrayExpr, ctx *ExecutionContext) (Valu
 	}
 	for _, elem := range expr.Elements {
 		if rangeExpr, ok := elem.(*RangeExpr); ok {
-			rangeVals, err := f.evaluateRangeExpr(rangeExpr, ctx)
+			rangeVals, err := f.evaluateRangeExpr(rangeExpr, ctx, depth)
 			if err != nil {
 				return nil, err
 			}
@@ -28,7 +28,7 @@ func (f *Filter) evaluateArrayExpr(expr *ArrayExpr, ctx *ExecutionContext) (Valu
 				values = append(values, rangeVals)
 			}
 		} else {
-			val, err := f.evaluate(elem, ctx)
+			val, err := f.evaluate(elem, ctx, depth)
 			if err != nil {
 				return nil, err
 			}
@@ -38,13 +38,13 @@ func (f *Filter) evaluateArrayExpr(expr *ArrayExpr, ctx *ExecutionContext) (Valu
 	return ArrayValue(values), nil
 }
 
-func (f *Filter) evaluateRangeExpr(expr *RangeExpr, ctx *ExecutionContext) (Value, error) {
-	start, err := f.evaluate(expr.Start, ctx)
+func (f *Filter) evaluateRangeExpr(expr *RangeExpr, ctx *ExecutionContext, depth int) (Value, error) {
+	start, err := f.evaluate(expr.Start, ctx, depth)
 	if err != nil {
 		return nil, err
 	}
 
-	end, err := f.evaluate(expr.End, ctx)
+	end, err := f.evaluate(expr.End, ctx, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -76,8 +76,8 @@ func (f *Filter) evaluateFieldExpr(expr *FieldExpr, ctx *ExecutionContext) (Valu
 	return val, nil
 }
 
-func (f *Filter) evaluateIndexExpr(expr *IndexExpr, ctx *ExecutionContext) (Value, error) {
-	object, err := f.evaluate(expr.Object, ctx)
+func (f *Filter) evaluateIndexExpr(expr *IndexExpr, ctx *ExecutionContext, depth int) (Value, error) {
+	object, err := f.evaluate(expr.Object, ctx, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func (f *Filter) evaluateIndexExpr(expr *IndexExpr, ctx *ExecutionContext) (Valu
 		return nil, nil
 	}
 
-	index, err := f.evaluate(expr.Index, ctx)
+	index, err := f.evaluate(expr.Index, ctx, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -121,8 +121,8 @@ func (f *Filter) evaluateIndexExpr(expr *IndexExpr, ctx *ExecutionContext) (Valu
 	return nil, nil
 }
 
-func (f *Filter) evaluateUnpackExpr(expr *UnpackExpr, ctx *ExecutionContext) (Value, error) {
-	arr, err := f.evaluate(expr.Array, ctx)
+func (f *Filter) evaluateUnpackExpr(expr *UnpackExpr, ctx *ExecutionContext, depth int) (Value, error) {
+	arr, err := f.evaluate(expr.Array, ctx, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -147,8 +147,8 @@ func (f *Filter) evaluateListRefExpr(expr *ListRefExpr, ctx *ExecutionContext) (
 	return nil, nil
 }
 
-func (f *Filter) evaluateUnaryExpr(expr *UnaryExpr, ctx *ExecutionContext) (Value, error) {
-	operand, err := f.evaluate(expr.Operand, ctx)
+func (f *Filter) evaluateUnaryExpr(expr *UnaryExpr, ctx *ExecutionContext, depth int) (Value, error) {
+	operand, err := f.evaluate(expr.Operand, ctx, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -165,14 +165,14 @@ func (f *Filter) evaluateUnaryExpr(expr *UnaryExpr, ctx *ExecutionContext) (Valu
 
 // evaluateLogicalOp handles short-circuit evaluation for logical operators (and, or, xor).
 // Returns (result, handled, error) where handled=true if this was a logical operator.
-func (f *Filter) evaluateLogicalOp(expr *BinaryExpr, left Value, ctx *ExecutionContext) (Value, bool, error) {
+func (f *Filter) evaluateLogicalOp(expr *BinaryExpr, left Value, ctx *ExecutionContext, depth int) (Value, bool, error) {
 	switch expr.Operator {
 	case TokenAnd:
 		leftTruthy := left != nil && left.IsTruthy()
 		if !leftTruthy {
 			return BoolValue(false), true, nil // Short-circuit: false and X = false
 		}
-		right, err := f.evaluate(expr.Right, ctx)
+		right, err := f.evaluate(expr.Right, ctx, depth)
 		if err != nil {
 			return nil, true, err
 		}
@@ -184,7 +184,7 @@ func (f *Filter) evaluateLogicalOp(expr *BinaryExpr, left Value, ctx *ExecutionC
 		if leftTruthy {
 			return BoolValue(true), true, nil // Short-circuit: true or X = true
 		}
-		right, err := f.evaluate(expr.Right, ctx)
+		right, err := f.evaluate(expr.Right, ctx, depth)
 		if err != nil {
 			return nil, true, err
 		}
@@ -193,7 +193,7 @@ func (f *Filter) evaluateLogicalOp(expr *BinaryExpr, left Value, ctx *ExecutionC
 
 	case TokenXor:
 		// XOR cannot short-circuit - both sides needed
-		right, err := f.evaluate(expr.Right, ctx)
+		right, err := f.evaluate(expr.Right, ctx, depth)
 		if err != nil {
 			return nil, true, err
 		}
@@ -204,19 +204,19 @@ func (f *Filter) evaluateLogicalOp(expr *BinaryExpr, left Value, ctx *ExecutionC
 	return nil, false, nil
 }
 
-func (f *Filter) evaluateBinaryExpr(expr *BinaryExpr, ctx *ExecutionContext) (Value, error) {
-	left, err := f.evaluate(expr.Left, ctx)
+func (f *Filter) evaluateBinaryExpr(expr *BinaryExpr, ctx *ExecutionContext, depth int) (Value, error) {
+	left, err := f.evaluate(expr.Left, ctx, depth)
 	if err != nil {
 		return nil, err
 	}
 
 	// Handle logical operators with short-circuit evaluation
-	if result, handled, err := f.evaluateLogicalOp(expr, left, ctx); handled {
+	if result, handled, err := f.evaluateLogicalOp(expr, left, ctx, depth); handled {
 		return result, err
 	}
 
 	// For non-logical operators, evaluate right side
-	right, err := f.evaluate(expr.Right, ctx)
+	right, err := f.evaluate(expr.Right, ctx, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -464,11 +464,26 @@ func (f *Filter) evaluateArithmetic(left, right Value, op TokenType) (Value, err
 
 	switch op {
 	case TokenPlus:
-		return IntValue(li + ri), nil
+		result := li + ri
+		if (ri > 0 && result < li) || (ri < 0 && result > li) {
+			return nil, nil
+		}
+		return IntValue(result), nil
 	case TokenMinus:
-		return IntValue(li - ri), nil
+		result := li - ri
+		if (ri > 0 && result > li) || (ri < 0 && result < li) {
+			return nil, nil
+		}
+		return IntValue(result), nil
 	case TokenAsterisk:
-		return IntValue(li * ri), nil
+		if li != 0 && ri != 0 {
+			result := li * ri
+			if result/ri != li {
+				return nil, nil
+			}
+			return IntValue(result), nil
+		}
+		return IntValue(0), nil
 	case TokenDiv:
 		if ri == 0 {
 			return nil, nil
@@ -654,7 +669,9 @@ func (f *Filter) getCompiledRegex(pattern string) (*regexp.Regexp, error) {
 	}
 
 	f.regexMu.Lock()
-	f.regexCache[pattern] = re
+	if len(f.regexCache) < maxFilterCacheSize {
+		f.regexCache[pattern] = re
+	}
 	f.regexMu.Unlock()
 	return re, nil
 }
@@ -750,7 +767,9 @@ func (f *Filter) getParsedCIDR(cidr string) (*net.IPNet, error) {
 	}
 
 	f.cidrMu.Lock()
-	f.cidrCache[cidr] = ipNet
+	if len(f.cidrCache) < maxFilterCacheSize {
+		f.cidrCache[cidr] = ipNet
+	}
 	f.cidrMu.Unlock()
 	return ipNet, nil
 }

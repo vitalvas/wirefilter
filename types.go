@@ -2,6 +2,7 @@ package wirefilter
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"regexp"
 	"sort"
@@ -322,7 +323,7 @@ func (d DurationValue) Equal(v Value) bool {
 	return time.Duration(d) == time.Duration(v.(DurationValue))
 }
 
-// String returns a human-readable duration with day support.
+// String returns a human-readable duration with day support and sub-second precision.
 func (d DurationValue) String() string {
 	dur := time.Duration(d)
 	if dur == 0 {
@@ -332,7 +333,11 @@ func (d DurationValue) String() string {
 	var sb strings.Builder
 	if dur < 0 {
 		sb.WriteByte('-')
-		dur = -dur
+		if dur == math.MinInt64 {
+			dur = math.MaxInt64
+		} else {
+			dur = -dur
+		}
 	}
 
 	days := dur / (24 * time.Hour)
@@ -342,6 +347,12 @@ func (d DurationValue) String() string {
 	minutes := dur / time.Minute
 	dur -= minutes * time.Minute
 	seconds := dur / time.Second
+	dur -= seconds * time.Second
+	millis := dur / time.Millisecond
+	dur -= millis * time.Millisecond
+	micros := dur / time.Microsecond
+	dur -= micros * time.Microsecond
+	nanos := dur
 
 	if days > 0 {
 		fmt.Fprintf(&sb, "%dd", days)
@@ -354,6 +365,15 @@ func (d DurationValue) String() string {
 	}
 	if seconds > 0 {
 		fmt.Fprintf(&sb, "%ds", seconds)
+	}
+	if millis > 0 {
+		fmt.Fprintf(&sb, "%dms", millis)
+	}
+	if micros > 0 {
+		fmt.Fprintf(&sb, "%dus", micros)
+	}
+	if nanos > 0 {
+		fmt.Fprintf(&sb, "%dns", nanos)
 	}
 
 	if sb.Len() == 0 || (sb.Len() == 1 && sb.String()[0] == '-') {

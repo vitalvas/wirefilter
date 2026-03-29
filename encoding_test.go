@@ -2,6 +2,7 @@ package wirefilter
 
 import (
 	"context"
+	"encoding/binary"
 	"net"
 	"testing"
 	"time"
@@ -744,12 +745,9 @@ func TestUnmarshalBinaryTruncatedDecoding(t *testing.T) {
 	})
 
 	t.Run("readValue truncated bool", func(t *testing.T) {
-		// LiteralExpr + BoolValue tag, but no bool byte
 		r := &decReader{data: []byte{valTypeBool}, pos: 0}
-		val, err := r.readValue()
-		// readByte at EOF returns 0, which means BoolValue(false) - not an error
-		assert.NoError(t, err)
-		assert.Equal(t, BoolValue(false), val)
+		_, err := r.readValue()
+		assert.Error(t, err)
 	})
 }
 
@@ -973,5 +971,100 @@ func TestEncodingTimeAndDuration(t *testing.T) {
 		r2, _ := restored.Execute(ctx)
 		assert.Equal(t, r1, r2)
 		assert.True(t, r1)
+	})
+}
+
+func TestUnmarshalBinaryDecodeLimits(t *testing.T) {
+	header := func() []byte {
+		return []byte{'W', 'F', encodingVersion}
+	}
+
+	appendUvarint := func(buf []byte, v uint64) []byte {
+		var tmp [binary.MaxVarintLen64]byte
+		n := binary.PutUvarint(tmp[:], v)
+		return append(buf, tmp[:n]...)
+	}
+
+	t.Run("string length exceeds limit", func(t *testing.T) {
+		data := header()
+		data = append(data, nodeTypeField)
+		data = appendUvarint(data, maxDecodeStringLen+1)
+
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "string length")
+	})
+
+	t.Run("array element count exceeds limit", func(t *testing.T) {
+		data := header()
+		data = append(data, nodeTypeArray)
+		data = appendUvarint(data, maxDecodeArrayLen+1)
+
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "element count")
+	})
+
+	t.Run("function argument count exceeds limit", func(t *testing.T) {
+		data := header()
+		data = append(data, nodeTypeFunctionCall)
+		data = appendUvarint(data, 4)
+		data = append(data, "test"...)
+		data = appendUvarint(data, maxDecodeArrayLen+1)
+
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "element count")
+	})
+
+	t.Run("depth exceeds limit", func(t *testing.T) {
+		data := header()
+		for range maxDecodeDepth + 1 {
+			data = append(data, nodeTypeUnary)
+			data = append(data, byte(TokenNot))
+		}
+		data = append(data, nodeTypeField)
+		data = appendUvarint(data, 1)
+		data = append(data, 'x')
+
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "depth exceeds")
+	})
+
+	t.Run("node count exceeds limit", func(t *testing.T) {
+		data := header()
+		for range maxDecodeNodes {
+			data = append(data, nodeTypeUnary)
+			data = append(data, byte(TokenNot))
+		}
+		data = append(data, nodeTypeField)
+		data = appendUvarint(data, 1)
+		data = append(data, 'x')
+
+		f := &Filter{}
+		err := f.UnmarshalBinary(data)
+		assert.Error(t, err)
+	})
+
+	t.Run("valid binary within limits", func(t *testing.T) {
+		filter, err := Compile(`x == 1 and y == 2`, nil)
+		require.NoError(t, err)
+
+		data, err := filter.MarshalBinary()
+		require.NoError(t, err)
+
+		restored := &Filter{}
+		err = restored.UnmarshalBinary(data)
+		assert.NoError(t, err)
+
+		ctx := NewExecutionContext().SetIntField("x", 1).SetIntField("y", 2)
+		result, err := restored.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
 	})
 }

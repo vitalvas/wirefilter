@@ -1763,3 +1763,23 @@ func TestFilterConcurrency(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+func TestEvalDepthLimit(t *testing.T) {
+	var sb strings.Builder
+	for range maxEvalDepth + 10 {
+		sb.WriteString("(")
+	}
+	sb.WriteString("x == 1")
+	for range maxEvalDepth + 10 {
+		sb.WriteString(") and x == 1")
+	}
+	expr := sb.String()
+
+	filter, err := Compile(expr, nil)
+	require.NoError(t, err)
+
+	ctx := NewExecutionContext().SetIntField("x", 1)
+	_, err = filter.Execute(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "maximum evaluation depth")
+}

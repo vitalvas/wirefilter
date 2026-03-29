@@ -9,15 +9,15 @@ import (
 	"strings"
 )
 
-func (f *Filter) evaluateFunctionCall(expr *FunctionCallExpr, ctx *ExecutionContext) (Value, error) {
+func (f *Filter) evaluateFunctionCall(expr *FunctionCallExpr, ctx *ExecutionContext, depth int) (Value, error) {
 	name := strings.ToLower(expr.Name)
 
 	// Special-case functions that need raw expressions (not evaluated args)
 	switch name {
 	case "any":
-		return f.fnAny(expr.Arguments, ctx)
+		return f.fnAny(expr.Arguments, ctx, depth)
 	case "all":
-		return f.fnAll(expr.Arguments, ctx)
+		return f.fnAll(expr.Arguments, ctx, depth)
 	case "now":
 		return NewTimeValue(ctx.now()), nil
 	}
@@ -30,7 +30,7 @@ func (f *Filter) evaluateFunctionCall(expr *FunctionCallExpr, ctx *ExecutionCont
 		args = make([]Value, 0, len(expr.Arguments))
 	}
 	for _, arg := range expr.Arguments {
-		val, err := f.evaluate(arg, ctx)
+		val, err := f.evaluate(arg, ctx, depth)
 		if err != nil {
 			return nil, err
 		}
@@ -235,13 +235,13 @@ func (f *Filter) fnEndsWith(args []Value) (Value, error) {
 }
 
 // any(expression) -> Bool - returns true if any element matches
-func (f *Filter) fnAny(args []Expression, ctx *ExecutionContext) (Value, error) {
+func (f *Filter) fnAny(args []Expression, ctx *ExecutionContext, depth int) (Value, error) {
 	if len(args) != 1 {
 		return BoolValue(false), nil
 	}
 
 	// The argument should be a binary expression with unpacked array on left
-	result, err := f.evaluate(args[0], ctx)
+	result, err := f.evaluate(args[0], ctx, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +253,7 @@ func (f *Filter) fnAny(args []Expression, ctx *ExecutionContext) (Value, error) 
 }
 
 // all(expression) -> Bool - returns true if all elements match
-func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext) (Value, error) {
+func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext, depth int) (Value, error) {
 	if len(args) != 1 {
 		return BoolValue(false), nil
 	}
@@ -263,7 +263,7 @@ func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext) (Value, error) 
 
 	// If it's a binary expression with unpacked array, we need ALL semantics
 	if binExpr, ok := arg.(*BinaryExpr); ok {
-		left, err := f.evaluate(binExpr.Left, ctx)
+		left, err := f.evaluate(binExpr.Left, ctx, depth)
 		if err != nil {
 			return nil, err
 		}
@@ -273,7 +273,7 @@ func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext) (Value, error) 
 				return BoolValue(false), nil
 			}
 
-			right, err := f.evaluate(binExpr.Right, ctx)
+			right, err := f.evaluate(binExpr.Right, ctx, depth)
 			if err != nil {
 				return nil, err
 			}
@@ -321,7 +321,7 @@ func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext) (Value, error) 
 	}
 
 	// Fallback: just evaluate the expression
-	result, err := f.evaluate(arg, ctx)
+	result, err := f.evaluate(arg, ctx, depth)
 	if err != nil {
 		return nil, err
 	}
@@ -347,7 +347,8 @@ func (f *Filter) fnConcat(args []Value) (Value, error) {
 	return StringValue(sb.String()), nil
 }
 
-// substring(String, Int, Int) -> String
+// substring(String, Int [, Int]) -> String
+// Indices are rune-based (not byte-based) for UTF-8 safety.
 func (f *Filter) fnSubstring(args []Value) (Value, error) {
 	if len(args) < 2 || args[0] == nil || args[1] == nil {
 		return nil, nil
@@ -356,28 +357,28 @@ func (f *Filter) fnSubstring(args []Value) (Value, error) {
 		return nil, nil
 	}
 
-	str := string(args[0].(StringValue))
+	runes := []rune(string(args[0].(StringValue)))
 	start := int(args[1].(IntValue))
 
 	if start < 0 {
 		start = 0
 	}
-	if start >= len(str) {
+	if start >= len(runes) {
 		return StringValue(""), nil
 	}
 
-	end := len(str)
+	end := len(runes)
 	if len(args) >= 3 && args[2] != nil && args[2].Type() == TypeInt {
 		end = int(args[2].(IntValue))
-		if end > len(str) {
-			end = len(str)
+		if end > len(runes) {
+			end = len(runes)
 		}
 		if end < start {
 			end = start
 		}
 	}
 
-	return StringValue(str[start:end]), nil
+	return StringValue(string(runes[start:end])), nil
 }
 
 // split(String, String) -> Array
@@ -677,8 +678,12 @@ func (f *Filter) fnAbs(args []Value) (Value, error) {
 	}
 	switch v := args[0].(type) {
 	case IntValue:
-		if int64(v) < 0 {
-			return IntValue(-int64(v)), nil
+		n := int64(v)
+		if n == math.MinInt64 {
+			return nil, nil // overflow: -MinInt64 cannot be represented
+		}
+		if n < 0 {
+			return IntValue(-n), nil
 		}
 		return v, nil
 	case FloatValue:

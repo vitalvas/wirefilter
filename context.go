@@ -404,7 +404,12 @@ func (ctx *ExecutionContext) WithContext(goCtx context.Context) *ExecutionContex
 
 // EnableTrace enables expression evaluation tracing.
 // After Execute, call Trace() to retrieve the evaluation trace tree.
-// When tracing is enabled, concurrent Execute calls are serialized for the trace operations.
+//
+// Tracing is designed for single-execution use. When tracing is enabled on a shared
+// context, concurrent Execute calls will interleave their trace entries, producing
+// a corrupted trace tree. For concurrent evaluation with tracing, use a separate
+// ExecutionContext per goroutine.
+//
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) EnableTrace() *ExecutionContext {
 	ctx.traceMu.Lock()

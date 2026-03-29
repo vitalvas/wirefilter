@@ -287,13 +287,25 @@ func (w *encWriter) writeValue(v Value) error {
 
 // --- Decoder ---
 
+// Decoding limits to prevent OOM from crafted binary input.
+const (
+	maxDecodeNodes     = 10000   // max total AST nodes in a decoded expression
+	maxDecodeStringLen = 1 << 20 // max string/byte slice length (1 MiB)
+	maxDecodeArrayLen  = 10000   // max array/function argument count
+	maxDecodeDepth     = maxEvalDepth
+)
+
 type decReader struct {
-	data []byte
-	pos  int
+	data  []byte
+	pos   int
+	nodes int // total decoded nodes
+	depth int // current recursion depth
+	err   error
 }
 
 func (r *decReader) readByte() byte {
 	if r.pos >= len(r.data) {
+		r.err = errTruncated
 		return 0
 	}
 	b := r.data[r.pos]
@@ -341,6 +353,9 @@ func (r *decReader) readString() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if length > maxDecodeStringLen {
+		return "", fmt.Errorf("wirefilter: string length %d exceeds maximum %d", length, maxDecodeStringLen)
+	}
 	b := r.readN(int(length))
 	if b == nil {
 		return "", errTruncated
@@ -352,6 +367,9 @@ func (r *decReader) readByteSlice() ([]byte, error) {
 	length, err := r.readUvarint()
 	if err != nil {
 		return nil, err
+	}
+	if length > maxDecodeStringLen {
+		return nil, fmt.Errorf("wirefilter: byte slice length %d exceeds maximum %d", length, maxDecodeStringLen)
 	}
 	b := r.readN(int(length))
 	if b == nil {
@@ -366,16 +384,58 @@ func (r *decReader) eof() bool {
 	return r.pos >= len(r.data)
 }
 
+func (r *decReader) checkDecodeLimits() error {
+	r.nodes++
+	if r.nodes > maxDecodeNodes {
+		return fmt.Errorf("wirefilter: decoded node count exceeds maximum %d", maxDecodeNodes)
+	}
+	r.depth++
+	if r.depth > maxDecodeDepth {
+		r.depth--
+		return fmt.Errorf("wirefilter: decoded expression depth exceeds maximum %d", maxDecodeDepth)
+	}
+	return nil
+}
+
+func (r *decReader) readExprSlice() ([]Expression, error) {
+	count, err := r.readUvarint()
+	if err != nil {
+		return nil, err
+	}
+	if count > maxDecodeArrayLen {
+		return nil, fmt.Errorf("wirefilter: element count %d exceeds maximum %d", count, maxDecodeArrayLen)
+	}
+	exprs := make([]Expression, count)
+	for i := range exprs {
+		exprs[i], err = r.readExpr()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return exprs, nil
+}
+
 func (r *decReader) readExpr() (Expression, error) {
 	if r.eof() {
 		return nil, io.ErrUnexpectedEOF
 	}
 
+	if err := r.checkDecodeLimits(); err != nil {
+		return nil, err
+	}
+	defer func() { r.depth-- }()
+
 	tag := r.readByte()
+	if r.err != nil {
+		return nil, r.err
+	}
 
 	switch tag {
 	case nodeTypeBinary:
 		op := TokenType(r.readByte())
+		if r.err != nil {
+			return nil, r.err
+		}
 		left, err := r.readExpr()
 		if err != nil {
 			return nil, err
@@ -388,6 +448,9 @@ func (r *decReader) readExpr() (Expression, error) {
 
 	case nodeTypeUnary:
 		op := TokenType(r.readByte())
+		if r.err != nil {
+			return nil, r.err
+		}
 		operand, err := r.readExpr()
 		if err != nil {
 			return nil, err
@@ -409,16 +472,9 @@ func (r *decReader) readExpr() (Expression, error) {
 		return &LiteralExpr{Value: val}, nil
 
 	case nodeTypeArray:
-		count, err := r.readUvarint()
+		elements, err := r.readExprSlice()
 		if err != nil {
 			return nil, err
-		}
-		elements := make([]Expression, count)
-		for i := range elements {
-			elements[i], err = r.readExpr()
-			if err != nil {
-				return nil, err
-			}
 		}
 		return &ArrayExpr{Elements: elements}, nil
 
@@ -463,16 +519,9 @@ func (r *decReader) readExpr() (Expression, error) {
 		if err != nil {
 			return nil, err
 		}
-		count, err := r.readUvarint()
+		args, err := r.readExprSlice()
 		if err != nil {
 			return nil, err
-		}
-		args := make([]Expression, count)
-		for i := range args {
-			args[i], err = r.readExpr()
-			if err != nil {
-				return nil, err
-			}
 		}
 		return &FunctionCallExpr{Name: name, Arguments: args}, nil
 	}
@@ -486,6 +535,9 @@ func (r *decReader) readValue() (Value, error) {
 	}
 
 	tag := r.readByte()
+	if r.err != nil {
+		return nil, r.err
+	}
 
 	switch tag {
 	case valTypeNil:
@@ -513,7 +565,11 @@ func (r *decReader) readValue() (Value, error) {
 		return FloatValue(math.Float64frombits(bits)), nil
 
 	case valTypeBool:
-		return BoolValue(r.readByte() != 0), nil
+		b := r.readByte()
+		if r.err != nil {
+			return nil, r.err
+		}
+		return BoolValue(b != 0), nil
 
 	case valTypeIP:
 		b, err := r.readByteSlice()

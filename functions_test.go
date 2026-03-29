@@ -3,6 +3,7 @@ package wirefilter
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"testing"
 	"time"
@@ -262,6 +263,13 @@ func TestFnMath(t *testing.T) {
 	t.Run("wrong type", func(t *testing.T) {
 		f, _ := Compile(`abs(name) == 0`, nil)
 		ctx := NewExecutionContext().SetStringField("name", "test")
+		result, _ := f.Execute(ctx)
+		assert.False(t, result)
+	})
+
+	t.Run("abs int MinInt64 overflow returns nil", func(t *testing.T) {
+		f, _ := Compile(`abs(x) == 0`, nil)
+		ctx := NewExecutionContext().SetIntField("x", math.MinInt64)
 		result, _ := f.Execute(ctx)
 		assert.False(t, result)
 	})
@@ -1400,6 +1408,15 @@ func TestFilterFunctions(t *testing.T) {
 		filter, err := Compile(`substring(name, 0, 100) == "hello"`, nil)
 		assert.NoError(t, err)
 		ctx := NewExecutionContext().SetStringField("name", "hello")
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("function substring utf8 rune indexing", func(t *testing.T) {
+		filter, err := Compile(`substring(name, 0, 3) == "one"`, nil)
+		assert.NoError(t, err)
+		ctx := NewExecutionContext().SetStringField("name", "one two")
 		result, err := filter.Execute(ctx)
 		assert.NoError(t, err)
 		assert.True(t, result)
