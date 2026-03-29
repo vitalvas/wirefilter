@@ -783,18 +783,25 @@ func exportValue(v Value) any {
 	}
 }
 
+var cacheKeyPool = sync.Pool{
+	New: func() any { return &strings.Builder{} },
+}
+
 // cacheKey builds a cache key for a function call.
 // It includes value types at every level of the value tree to prevent
 // collisions across different types, including nested elements in
 // arrays and maps.
 func cacheKey(name string, args []Value) string {
-	var sb strings.Builder
+	sb := cacheKeyPool.Get().(*strings.Builder)
+	sb.Reset()
 	sb.WriteString(name)
 	for _, arg := range args {
 		sb.WriteByte(':')
-		writeCacheKeyValue(&sb, arg)
+		writeCacheKeyValue(sb, arg)
 	}
-	return sb.String()
+	key := sb.String()
+	cacheKeyPool.Put(sb)
+	return key
 }
 
 // writeCacheKeyValue writes a type-tagged canonical representation of a value

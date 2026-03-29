@@ -251,17 +251,36 @@
 //	result, _ := filter.Execute(ctx)
 //	trace := ctx.Trace() // *TraceNode with Expression, Result, Duration, Children
 //
+// # Snapshot Context
+//
+// For maximum evaluation performance, create a frozen snapshot of the context.
+// Snapshots are immutable and skip all mutex operations on the hot evaluation path:
+//
+//	ctx := wirefilter.NewExecutionContext().
+//	    SetStringField("http.host", "example.com").
+//	    SetIntField("http.status", 500)
+//
+//	snap := ctx.Snapshot()
+//
+//	// Evaluate many filters against the same snapshot (lock-free)
+//	for _, filter := range filters {
+//	    result, _ := filter.Execute(snap)
+//	}
+//
+// Set* methods on a snapshot are silent no-ops.
+//
 // # Function Result Caching
 //
-// Cache results of user-defined function calls across multiple Execute calls
-// on the same context (useful for evaluating many rules against one request):
+// Cache results of both built-in and user-defined function calls across
+// multiple Execute calls on the same context:
 //
 //	ctx := wirefilter.NewExecutionContext().
 //	    EnableCache().
 //	    SetCacheMaxSize(2048)  // default is 1024
 //
-//	// After batch evaluation:
-//	ctx.ResetCache()
+//	// lower(), upper(), len() and UDF results are cached
+//	// Same function+args is only computed once across all rules
+//	ctx.ResetCache()  // clear between request batches
 //
 // Cache keys are type-aware at every nesting level to prevent collisions.
 //
@@ -331,4 +350,11 @@
 // ExecutionContext protects data maps (fields, lists, tables, funcs) with sync.RWMutex,
 // and cache and trace state with dedicated sync.Mutex locks.
 // Multiple filters can be executed concurrently against the same context.
+// For maximum throughput, use Snapshot() to create a lock-free copy.
+//
+// # Automatic Set Indexing
+//
+// Lists with 16 or more elements set via SetList or SetIPList are automatically
+// indexed with a hash map for O(1) membership tests. This accelerates
+// "value in $large_list" patterns without any API changes.
 package wirefilter

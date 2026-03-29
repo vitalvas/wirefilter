@@ -214,33 +214,33 @@ func (f *Filter) fnLen(args []Value) (Value, error) {
 // starts_with(String, String) -> Bool
 func (f *Filter) fnStartsWith(args []Value) (Value, error) {
 	if len(args) != 2 || args[0] == nil || args[1] == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	if args[0].Type() != TypeString || args[1].Type() != TypeString {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	str := string(args[0].(StringValue))
 	prefix := string(args[1].(StringValue))
-	return BoolValue(strings.HasPrefix(str, prefix)), nil
+	return boolVal(strings.HasPrefix(str, prefix)), nil
 }
 
 // ends_with(String, String) -> Bool
 func (f *Filter) fnEndsWith(args []Value) (Value, error) {
 	if len(args) != 2 || args[0] == nil || args[1] == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	if args[0].Type() != TypeString || args[1].Type() != TypeString {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	str := string(args[0].(StringValue))
 	suffix := string(args[1].(StringValue))
-	return BoolValue(strings.HasSuffix(str, suffix)), nil
+	return boolVal(strings.HasSuffix(str, suffix)), nil
 }
 
 // any(expression) -> Bool - returns true if any element matches
 func (f *Filter) fnAny(args []Expression, ctx *ExecutionContext, depth int) (Value, error) {
 	if len(args) != 1 {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 
 	// The argument should be a binary expression with unpacked array on left
@@ -249,16 +249,16 @@ func (f *Filter) fnAny(args []Expression, ctx *ExecutionContext, depth int) (Val
 		return nil, err
 	}
 	if result == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 
-	return BoolValue(result.IsTruthy()), nil
+	return boolVal(result.IsTruthy()), nil
 }
 
 // all(expression) -> Bool - returns true if all elements match
 func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext, depth int) (Value, error) {
 	if len(args) != 1 {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 
 	// Evaluate the inner expression
@@ -273,7 +273,7 @@ func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext, depth int) (Val
 
 		if uv, ok := left.(UnpackedArrayValue); ok {
 			if len(uv.Array) == 0 {
-				return BoolValue(false), nil
+				return boolFalse, nil
 			}
 
 			right, err := f.evaluate(binExpr.Right, ctx, depth)
@@ -293,7 +293,7 @@ func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext, depth int) (Val
 					if eqErr != nil {
 						return nil, eqErr
 					}
-					result = BoolValue(!bool(eqResult.(BoolValue)))
+					result = boolVal(!eqResult.IsTruthy())
 				case TokenContains:
 					result, err = f.evaluateContains(elem, right)
 				case TokenMatches:
@@ -316,10 +316,10 @@ func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext, depth int) (Val
 					return nil, err
 				}
 				if result == nil || !result.IsTruthy() {
-					return BoolValue(false), nil
+					return boolFalse, nil
 				}
 			}
-			return BoolValue(true), nil
+			return boolTrue, nil
 		}
 	}
 
@@ -329,9 +329,9 @@ func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext, depth int) (Val
 		return nil, err
 	}
 	if result == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
-	return BoolValue(result.IsTruthy()), nil
+	return boolVal(result.IsTruthy()), nil
 }
 
 // concat(String...) -> String
@@ -433,29 +433,29 @@ func (f *Filter) fnJoin(args []Value) (Value, error) {
 // has_key(Map, String) -> Bool
 func (f *Filter) fnHasKey(args []Value) (Value, error) {
 	if len(args) != 2 || args[0] == nil || args[1] == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	if args[0].Type() != TypeMap || args[1].Type() != TypeString {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 
 	m := args[0].(MapValue)
 	key := string(args[1].(StringValue))
 	_, ok := m.Get(key)
-	return BoolValue(ok), nil
+	return boolVal(ok), nil
 }
 
 // has_value(Array, Value) -> Bool
 func (f *Filter) fnHasValue(args []Value) (Value, error) {
 	if len(args) != 2 || args[0] == nil || args[1] == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	if args[0].Type() != TypeArray {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 
 	arr := args[0].(ArrayValue)
-	return BoolValue(arr.Contains(args[1])), nil
+	return boolVal(arr.Contains(args[1])), nil
 }
 
 // url_decode(String) -> String
@@ -656,10 +656,10 @@ func (f *Filter) fnCoalesce(args []Value) (Value, error) {
 // contains_word(String, String) -> Bool
 func (f *Filter) fnContainsWord(args []Value) (Value, error) {
 	if len(args) != 2 || args[0] == nil || args[1] == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	if args[0].Type() != TypeString || args[1].Type() != TypeString {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 
 	str := string(args[0].(StringValue))
@@ -668,10 +668,10 @@ func (f *Filter) fnContainsWord(args []Value) (Value, error) {
 
 	re, err := f.getCompiledRegex(pattern)
 	if err != nil {
-		return BoolValue(false), err
+		return boolFalse, err
 	}
 
-	return BoolValue(re.MatchString(str)), nil
+	return boolVal(re.MatchString(str)), nil
 }
 
 // abs(Int|Float) -> Int|Float
@@ -740,37 +740,37 @@ func (f *Filter) fnRound(args []Value) (Value, error) {
 // is_ipv4(IP) -> Bool
 func (f *Filter) fnIsIPv4(args []Value) (Value, error) {
 	if len(args) != 1 || args[0] == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	if args[0].Type() != TypeIP {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	ip := args[0].(IPValue).IP
-	return BoolValue(ip.To4() != nil), nil
+	return boolVal(ip.To4() != nil), nil
 }
 
 // is_ipv6(IP) -> Bool
 func (f *Filter) fnIsIPv6(args []Value) (Value, error) {
 	if len(args) != 1 || args[0] == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	if args[0].Type() != TypeIP {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	ip := args[0].(IPValue).IP
-	return BoolValue(ip.To4() == nil && len(ip) == 16), nil
+	return boolVal(ip.To4() == nil && len(ip) == 16), nil
 }
 
 // is_loopback(IP) -> Bool
 func (f *Filter) fnIsLoopback(args []Value) (Value, error) {
 	if len(args) != 1 || args[0] == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	if args[0].Type() != TypeIP {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	ip := args[0].(IPValue).IP
-	return BoolValue(ip.IsLoopback()), nil
+	return boolVal(ip.IsLoopback()), nil
 }
 
 // regex_extract(String, String) -> String
@@ -874,10 +874,10 @@ func (f *Filter) fnDifference(args []Value) (Value, error) {
 // contains_any(Array, Array) -> Bool
 func (f *Filter) fnContainsAny(args []Value) (Value, error) {
 	if len(args) != 2 || args[0] == nil || args[1] == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	if args[0].Type() != TypeArray || args[1].Type() != TypeArray {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 
 	left := args[0].(ArrayValue)
@@ -885,19 +885,19 @@ func (f *Filter) fnContainsAny(args []Value) (Value, error) {
 
 	for _, rElem := range right {
 		if left.Contains(rElem) {
-			return BoolValue(true), nil
+			return boolTrue, nil
 		}
 	}
-	return BoolValue(false), nil
+	return boolFalse, nil
 }
 
 // contains_all(Array, Array) -> Bool
 func (f *Filter) fnContainsAll(args []Value) (Value, error) {
 	if len(args) != 2 || args[0] == nil || args[1] == nil {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 	if args[0].Type() != TypeArray || args[1].Type() != TypeArray {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
 
 	left := args[0].(ArrayValue)
@@ -905,17 +905,17 @@ func (f *Filter) fnContainsAll(args []Value) (Value, error) {
 
 	for _, rElem := range right {
 		if !left.Contains(rElem) {
-			return BoolValue(false), nil
+			return boolFalse, nil
 		}
 	}
-	return BoolValue(true), nil
+	return boolTrue, nil
 }
 
 // exists(Value) -> Bool
 // Returns true if the argument is not nil (field is set in context).
 func (f *Filter) fnExists(args []Value) (Value, error) {
 	if len(args) != 1 {
-		return BoolValue(false), nil
+		return boolFalse, nil
 	}
-	return BoolValue(args[0] != nil), nil
+	return boolVal(args[0] != nil), nil
 }

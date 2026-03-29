@@ -39,7 +39,9 @@ inspired by Cloudflare's Wirefilter.
 - Execution timeout via `context.Context`
 - Injectable clock via `WithNow` for deterministic testing
 - Expression evaluation tracing for debugging
-- Configurable result caching for UDF calls
+- Configurable result caching for built-in and user-defined function calls
+- Snapshot context for lock-free evaluation (`Snapshot()`)
+- Automatic O(1) set indexing for large lists (16+ elements)
 - Context export for audit logging (`Export()`, `ExportLists()`)
 - Binary serialization for pre-compiled filter storage and fast loading
 - Thread-safe `Filter` and `ExecutionContext` (concurrent `Execute()` calls on shared contexts)
@@ -939,7 +941,7 @@ trace := ctx.Trace() // returns *TraceNode tree with expression, result, duratio
 
 ### Result Caching
 
-Cache user-defined function results across multiple rule evaluations:
+Cache built-in and user-defined function results across multiple rule evaluations:
 
 ```go
 ctx := wirefilter.NewExecutionContext().
@@ -947,9 +949,10 @@ ctx := wirefilter.NewExecutionContext().
     SetCacheMaxSize(5000).      // or set custom limit
     SetFunc("get_score", handler)
 
+// lower(), upper(), len() and UDF results are cached
 // Same function+args only calls handler once across all rules
 filter1.Execute(ctx)
-filter2.Execute(ctx) // get_score results served from cache
+filter2.Execute(ctx) // results served from cache
 
 ctx.ResetCache()     // clear cache between request batches
 ```
@@ -1695,6 +1698,53 @@ type FuncSignature struct {
 When `ArgTypes` is `nil`, argument validation is skipped. Otherwise, the compiler
 checks both the argument count and types at compile time.
 
+## Snapshot Context
+
+For maximum evaluation performance, create a frozen snapshot of the execution
+context. Snapshots are immutable and skip all mutex operations on the hot path:
+
+```go
+ctx := wirefilter.NewExecutionContext().
+    SetStringField("http.host", "example.com").
+    SetIntField("http.status", 500).
+    EnableCache()
+
+snap := ctx.Snapshot()
+
+// Evaluate many filters against the same snapshot (lock-free)
+for _, filter := range filters {
+    result, _ := filter.Execute(snap)
+}
+```
+
+Snapshots share the cache settings from the source context but maintain
+independent cache state. Set* methods on a snapshot are silent no-ops.
+
+Use `Frozen()` to check if a context is a snapshot:
+
+```go
+if ctx.Frozen() {
+    // read-only snapshot
+}
+```
+
+## Automatic Set Indexing
+
+Lists with 16 or more elements set via `SetList` or `SetIPList` are
+automatically indexed with a hash map for O(1) membership tests.
+This accelerates `value in $large_list` patterns without any API changes:
+
+```go
+// 1000 blocked hosts - automatically indexed for O(1) lookups
+ctx.SetList("blocked_hosts", blockedHosts)
+
+// Filter evaluation uses hash lookup instead of linear scan
+filter, _ := wirefilter.Compile(`http.host in $blocked_hosts`, schema)
+```
+
+IP and CIDR elements in lists use hash lookup for exact IP matches
+and fall back to linear scan for CIDR containment checks.
+
 ## Performance
 
 The filter engine is designed for high performance:
@@ -1709,10 +1759,16 @@ The filter engine is designed for high performance:
 - Stack-buffered arrays (up to 8 elements) and function args (up to 4 args) avoid heap allocation
 - Switch-based built-in function dispatch (no map allocation per call)
 - Time values stored as int64 nanoseconds to avoid interface boxing overhead
+- Snapshot contexts skip all mutex operations for lock-free evaluation
+- Large lists (16+ elements) auto-promote to hash-indexed sets for O(1) membership
+- Built-in function results cached alongside UDF results when caching is enabled
 
-For optimal performance, compile filters once and reuse them across multiple
-executions. For large rule sets, pre-compile and store the binary representation
-for fast loading.
+For optimal performance:
+
+- Compile filters once and reuse them across multiple executions
+- Use `Snapshot()` when evaluating many rules against the same request data
+- Enable `EnableCache()` to avoid redundant function evaluations across rules
+- For large rule sets, pre-compile and store the binary representation for fast loading
 
 ## Error Handling
 
