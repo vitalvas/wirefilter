@@ -1,6 +1,7 @@
 package wirefilter
 
 import (
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -859,5 +860,86 @@ func TestIntervalValue(t *testing.T) {
 	t.Run("truthy", func(t *testing.T) {
 		iv := NewDurationInterval(DurationValue(time.Hour), DurationValue(2*time.Hour))
 		assert.True(t, iv.IsTruthy())
+	})
+}
+
+func TestSetValue(t *testing.T) {
+	t.Run("contains string O(1)", func(t *testing.T) {
+		arr := ArrayValue{StringValue("a"), StringValue("b"), StringValue("c")}
+		sv := NewSetValue(arr)
+		assert.True(t, sv.Contains(StringValue("b")))
+		assert.False(t, sv.Contains(StringValue("d")))
+	})
+
+	t.Run("contains int", func(t *testing.T) {
+		arr := ArrayValue{IntValue(1), IntValue(2), IntValue(3)}
+		sv := NewSetValue(arr)
+		assert.True(t, sv.Contains(IntValue(2)))
+		assert.False(t, sv.Contains(IntValue(4)))
+	})
+
+	t.Run("contains IP with CIDR fallback", func(t *testing.T) {
+		_, cidr, _ := net.ParseCIDR("10.0.0.0/8")
+		arr := ArrayValue{
+			IPValue{IP: net.ParseIP("192.168.1.1").To16()},
+			CIDRValue{IPNet: cidr},
+		}
+		sv := NewSetValue(arr)
+		assert.True(t, sv.hasNet)
+		assert.True(t, sv.Contains(IPValue{IP: net.ParseIP("10.0.0.5").To16()}))
+		assert.False(t, sv.Contains(IPValue{IP: net.ParseIP("172.16.0.1").To16()}))
+	})
+
+	t.Run("type is array", func(t *testing.T) {
+		sv := NewSetValue(ArrayValue{StringValue("x")})
+		assert.Equal(t, TypeArray, sv.Type())
+		assert.True(t, sv.IsTruthy())
+	})
+
+	t.Run("equal", func(t *testing.T) {
+		arr := ArrayValue{StringValue("a"), StringValue("b")}
+		sv1 := NewSetValue(arr)
+		sv2 := NewSetValue(arr)
+		assert.True(t, sv1.Equal(sv2))
+		assert.True(t, sv1.Equal(arr))
+	})
+
+	t.Run("contains nil", func(t *testing.T) {
+		arr := ArrayValue{nil, StringValue("a")}
+		sv := NewSetValue(arr)
+		assert.True(t, sv.Contains(nil))
+	})
+}
+
+func TestSetValueInFilter(t *testing.T) {
+	t.Run("large list auto-promotes to set", func(t *testing.T) {
+		schema := NewSchema().AddField("role", TypeString)
+		filter, _ := Compile(`role in $roles`, schema)
+
+		roles := make([]string, 20)
+		for i := range roles {
+			roles[i] = fmt.Sprintf("role-%d", i)
+		}
+
+		ctx := NewExecutionContext().
+			SetStringField("role", "role-15").
+			SetList("roles", roles)
+
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("small list stays as array", func(t *testing.T) {
+		schema := NewSchema().AddField("role", TypeString)
+		filter, _ := Compile(`role in $roles`, schema)
+
+		ctx := NewExecutionContext().
+			SetStringField("role", "admin").
+			SetList("roles", []string{"admin", "root"})
+
+		result, err := filter.Execute(ctx)
+		assert.NoError(t, err)
+		assert.True(t, result)
 	})
 }

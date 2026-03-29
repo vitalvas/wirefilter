@@ -523,7 +523,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 			SetStringField("zone", "office").
 			SetFunc("get_allowed_ips", func(_ context.Context, _ []Value) (Value, error) {
 				return ArrayValue{
-					CIDRValue{IPNet: mustParseCIDR("10.0.0.0/8")},
+					CIDRValue{IPNet: func() *net.IPNet { _, n, _ := net.ParseCIDR("10.0.0.0/8"); return n }()},
 				}, nil
 			})
 		result, err := filter.Execute(ctx)
@@ -539,7 +539,7 @@ func TestUserDefinedFunctions(t *testing.T) {
 			SetIPField("ip.src", "192.168.1.50").
 			SetStringField("zone", "lan").
 			SetFunc("get_network", func(_ context.Context, _ []Value) (Value, error) {
-				return CIDRValue{IPNet: mustParseCIDR("192.168.0.0/16")}, nil
+				return CIDRValue{IPNet: func() *net.IPNet { _, n, _ := net.ParseCIDR("192.168.0.0/16"); return n }()}, nil
 			})
 		result, err := filter.Execute(ctx)
 		assert.NoError(t, err)
@@ -664,14 +664,6 @@ func TestUserDefinedFunctions(t *testing.T) {
 		assert.NoError(t, err)
 		assert.False(t, result)
 	})
-}
-
-func mustParseCIDR(s string) *net.IPNet {
-	_, ipNet, err := net.ParseCIDR(s)
-	if err != nil {
-		panic(err)
-	}
-	return ipNet
 }
 
 func TestExists(t *testing.T) {
@@ -2018,5 +2010,26 @@ func TestNowBuiltinFunction(t *testing.T) {
 		// now should still work even in allowlist mode (built-in)
 		_, err := Compile(`ts < now()`, schema)
 		assert.NoError(t, err)
+	})
+}
+
+func TestBuiltinFunctionCaching(t *testing.T) {
+	t.Run("builtin cached across rules", func(t *testing.T) {
+		schema := NewSchema().AddField("host", TypeString)
+
+		f1, _ := Compile(`lower(host) == "example.com"`, schema)
+		f2, _ := Compile(`lower(host) == "other.com"`, schema)
+
+		ctx := NewExecutionContext().
+			SetStringField("host", "EXAMPLE.COM").
+			EnableCache()
+
+		r1, _ := f1.Execute(ctx)
+		assert.True(t, r1)
+
+		r2, _ := f2.Execute(ctx)
+		assert.False(t, r2)
+
+		assert.Equal(t, 1, ctx.CacheLen())
 	})
 }

@@ -434,7 +434,7 @@ func TestExecutionContext(t *testing.T) {
 
 	t.Run("reset cache on nil cache", func(t *testing.T) {
 		ctx := NewExecutionContext()
-		ctx.ResetCache() // should not panic
+		ctx.ResetCache()
 		assert.Equal(t, 0, ctx.CacheLen())
 	})
 
@@ -1525,5 +1525,124 @@ func TestExecutionContextConcurrency(t *testing.T) {
 			}()
 		}
 		wg.Wait()
+	})
+}
+
+func TestSnapshot(t *testing.T) {
+	t.Run("snapshot preserves fields", func(t *testing.T) {
+		ctx := NewExecutionContext().
+			SetStringField("host", "example.com").
+			SetIntField("status", 200)
+
+		snap := ctx.Snapshot()
+
+		val, ok := snap.GetField("host")
+		require.True(t, ok)
+		assert.Equal(t, StringValue("example.com"), val)
+
+		val, ok = snap.GetField("status")
+		require.True(t, ok)
+		assert.Equal(t, IntValue(200), val)
+	})
+
+	t.Run("snapshot is frozen", func(t *testing.T) {
+		snap := NewExecutionContext().Snapshot()
+		assert.True(t, snap.Frozen())
+
+		snap.SetStringField("x", "y")
+		_, ok := snap.GetField("x")
+		assert.False(t, ok)
+	})
+
+	t.Run("snapshot isolated from source", func(t *testing.T) {
+		ctx := NewExecutionContext().SetStringField("x", "original")
+		snap := ctx.Snapshot()
+
+		ctx.SetStringField("x", "modified")
+
+		val, _ := snap.GetField("x")
+		assert.Equal(t, StringValue("original"), val)
+	})
+
+	t.Run("snapshot execute without locks", func(t *testing.T) {
+		schema := NewSchema().
+			AddField("http.host", TypeString).
+			AddField("http.status", TypeInt)
+
+		filter, err := Compile(`http.host == "example.com" and http.status >= 400`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetStringField("http.host", "example.com").
+			SetIntField("http.status", 500)
+
+		snap := ctx.Snapshot()
+
+		result, err := filter.Execute(snap)
+		assert.NoError(t, err)
+		assert.True(t, result)
+	})
+
+	t.Run("snapshot concurrent execute", func(t *testing.T) {
+		schema := NewSchema().AddField("x", TypeInt)
+		filter, err := Compile(`x > 0`, schema)
+		require.NoError(t, err)
+
+		snap := NewExecutionContext().SetIntField("x", 42).Snapshot()
+
+		var wg sync.WaitGroup
+		for range 100 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				result, err := filter.Execute(snap)
+				assert.NoError(t, err)
+				assert.True(t, result)
+			}()
+		}
+		wg.Wait()
+	})
+
+	t.Run("snapshot with cache", func(t *testing.T) {
+		schema := NewSchema().
+			AddField("x", TypeString).
+			RegisterFunction("echo", TypeString, []Type{TypeString})
+
+		filter, err := Compile(`echo(x) == "hello"`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetStringField("x", "hello").
+			EnableCache().
+			SetFunc("echo", func(_ context.Context, args []Value) (Value, error) {
+				return args[0], nil
+			})
+
+		snap := ctx.Snapshot()
+		result, err := filter.Execute(snap)
+		assert.NoError(t, err)
+		assert.True(t, result)
+		assert.Equal(t, 1, snap.CacheLen())
+	})
+
+	t.Run("snapshot with lists and tables", func(t *testing.T) {
+		schema := NewSchema().
+			AddField("role", TypeString).
+			AddField("user.id", TypeString)
+
+		filter, err := Compile(`role in $admin_roles and $tiers[user.id] == "premium"`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetStringField("role", "admin").
+			SetStringField("user.id", "u1").
+			SetList("admin_roles", []string{"admin", "root"}).
+			SetTable("tiers", map[string]string{"u1": "premium"})
+
+		snap := ctx.Snapshot()
+
+		result, err := filter.Execute(snap)
+		assert.NoError(t, err)
+		assert.True(t, result)
 	})
 }

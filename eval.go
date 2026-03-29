@@ -138,6 +138,9 @@ func (f *Filter) evaluateUnpackExpr(expr *UnpackExpr, ctx *ExecutionContext, dep
 }
 
 func (f *Filter) evaluateListRefExpr(expr *ListRefExpr, ctx *ExecutionContext) (Value, error) {
+	if set, ok := ctx.getSet(expr.Name); ok {
+		return set, nil
+	}
 	if list, ok := ctx.GetList(expr.Name); ok {
 		return list, nil
 	}
@@ -422,46 +425,49 @@ func (f *Filter) evaluateArithmetic(left, right Value, op TokenType) (Value, err
 		return nil, nil
 	}
 
-	// Temporal arithmetic
 	if result, ok := f.evaluateTemporalArithmetic(left, right, op); ok {
 		return result, nil
 	}
 
-	// If either operand is a float, do float arithmetic
 	if left.Type() == TypeFloat || right.Type() == TypeFloat {
-		lf, lok := toFloat64(left)
-		rf, rok := toFloat64(right)
-		if !lok || !rok {
+		return evalFloatArithmetic(left, right, op)
+	}
+
+	if left.Type() == TypeInt && right.Type() == TypeInt {
+		return evalIntArithmetic(int64(left.(IntValue)), int64(right.(IntValue)), op)
+	}
+
+	return nil, nil
+}
+
+func evalFloatArithmetic(left, right Value, op TokenType) (Value, error) {
+	lf, lok := toFloat64(left)
+	rf, rok := toFloat64(right)
+	if !lok || !rok {
+		return nil, nil
+	}
+	switch op {
+	case TokenPlus:
+		return FloatValue(lf + rf), nil
+	case TokenMinus:
+		return FloatValue(lf - rf), nil
+	case TokenAsterisk:
+		return FloatValue(lf * rf), nil
+	case TokenDiv:
+		if rf == 0 {
 			return nil, nil
 		}
-		switch op {
-		case TokenPlus:
-			return FloatValue(lf + rf), nil
-		case TokenMinus:
-			return FloatValue(lf - rf), nil
-		case TokenAsterisk:
-			return FloatValue(lf * rf), nil
-		case TokenDiv:
-			if rf == 0 {
-				return nil, nil
-			}
-			return FloatValue(lf / rf), nil
-		case TokenMod:
-			if rf == 0 {
-				return nil, nil
-			}
-			return FloatValue(math.Mod(lf, rf)), nil
+		return FloatValue(lf / rf), nil
+	case TokenMod:
+		if rf == 0 {
+			return nil, nil
 		}
-		return nil, nil
+		return FloatValue(math.Mod(lf, rf)), nil
 	}
+	return nil, nil
+}
 
-	// Integer arithmetic
-	if left.Type() != TypeInt || right.Type() != TypeInt {
-		return nil, nil
-	}
-	li := int64(left.(IntValue))
-	ri := int64(right.(IntValue))
-
+func evalIntArithmetic(li, ri int64, op TokenType) (Value, error) {
 	switch op {
 	case TokenPlus:
 		result := li + ri
@@ -679,6 +685,11 @@ func (f *Filter) getCompiledRegex(pattern string) (*regexp.Regexp, error) {
 func (f *Filter) evaluateIn(left, right Value) (Value, error) {
 	if left == nil || right == nil {
 		return BoolValue(false), nil
+	}
+
+	// Handle SetValue for O(1) membership
+	if sv, ok := right.(SetValue); ok {
+		return BoolValue(sv.Contains(left)), nil
 	}
 
 	// Handle IP in CIDR directly: ip.src in 192.168.0.0/24

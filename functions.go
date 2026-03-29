@@ -37,16 +37,19 @@ func (f *Filter) evaluateFunctionCall(expr *FunctionCallExpr, ctx *ExecutionCont
 		args = append(args, val)
 	}
 
+	key := cacheKey(name, args)
+	if cached, ok := ctx.getCached(key); ok {
+		return cached, nil
+	}
+
 	if result, ok, err := f.callBuiltin(name, args); ok {
+		if err == nil {
+			ctx.setCache(key, result)
+		}
 		return result, err
 	}
 
-	// Check user-defined functions in the execution context (with optional caching)
 	if fn, ok := ctx.GetFunc(name); ok {
-		key := cacheKey(name, args)
-		if cached, ok := ctx.getCached(key); ok {
-			return cached, nil
-		}
 		result, err := fn(ctx.Context(), args)
 		if err != nil {
 			return nil, err

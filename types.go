@@ -232,6 +232,80 @@ func (a ArrayValue) Contains(v Value) bool {
 	return false
 }
 
+// setAutoPromoteThreshold is the minimum array size for automatic promotion to SetValue.
+const setAutoPromoteThreshold = 16
+
+// SetValue wraps an ArrayValue with a hash map for O(1) membership tests.
+// It implements the Value interface with TypeArray for compatibility.
+// IP and CIDR values require linear scan and are not indexed in the hash map.
+type SetValue struct {
+	Array  ArrayValue
+	index  map[string]struct{}
+	hasNet bool // true if array contains IP or CIDR values (require linear scan)
+}
+
+// NewSetValue creates a SetValue from an ArrayValue.
+// String, Int, Float, Bool, Time, Duration values are indexed for O(1) lookup.
+// IP and CIDR values are kept in the array for linear containment checks.
+func NewSetValue(arr ArrayValue) SetValue {
+	idx := make(map[string]struct{}, len(arr))
+	var hasNet bool
+	for _, v := range arr {
+		if v == nil {
+			continue
+		}
+		switch v.Type() {
+		case TypeIP, TypeCIDR:
+			hasNet = true
+		default:
+			idx[setKey(v)] = struct{}{}
+		}
+	}
+	return SetValue{Array: arr, index: idx, hasNet: hasNet}
+}
+
+func setKey(v Value) string { return fmt.Sprintf("%s:%s", v.Type(), v.String()) }
+
+func (s SetValue) Type() Type     { return TypeArray }
+func (s SetValue) IsTruthy() bool { return true }
+func (s SetValue) String() string { return s.Array.String() }
+func (s SetValue) Equal(v Value) bool {
+	if other, ok := v.(SetValue); ok {
+		return s.Array.Equal(other.Array)
+	}
+	return s.Array.Equal(v)
+}
+
+// Contains checks if the set contains the specified value.
+// Uses O(1) hash lookup for indexable types, falls back to linear scan for IP/CIDR.
+func (s SetValue) Contains(v Value) bool {
+	if v == nil {
+		return s.Array.Contains(nil)
+	}
+	switch v.Type() {
+	case TypeIP:
+		if _, ok := s.index[setKey(v)]; ok {
+			return true
+		}
+		if s.hasNet {
+			ipVal := v.(IPValue)
+			for _, elem := range s.Array {
+				if elem != nil && elem.Type() == TypeCIDR {
+					if elem.(CIDRValue).Contains(ipVal.IP) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	case TypeCIDR:
+		return s.Array.Contains(v)
+	default:
+		_, ok := s.index[setKey(v)]
+		return ok
+	}
+}
+
 // MapValue represents a map of string keys to Value.
 type MapValue map[string]Value
 
