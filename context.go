@@ -5,6 +5,7 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,7 +28,11 @@ func (t *TraceNode) addChild(child *TraceNode) {
 }
 
 // ExecutionContext holds the runtime values for fields that are evaluated during filter execution.
+// ExecutionContext is safe for concurrent use across goroutines. Multiple filters can be
+// executed concurrently against the same context. Setup methods (Set*) can be called
+// concurrently with each other and with Execute calls.
 type ExecutionContext struct {
+	mu     sync.RWMutex
 	fields map[string]Value
 	lists  map[string]ArrayValue
 	tables map[string]MapValue
@@ -36,9 +41,13 @@ type ExecutionContext struct {
 	nowFunc func() time.Time // injectable clock for now()
 
 	// Evaluation options
-	goCtx        context.Context  // cancellation/timeout
-	traceRoot    *TraceNode       // trace tree root
-	traceStack   []*TraceNode     // current trace path
+	goCtx context.Context // cancellation/timeout
+
+	traceMu    sync.Mutex
+	traceRoot  *TraceNode   // trace tree root
+	traceStack []*TraceNode // current trace path
+
+	cacheMu      sync.Mutex
 	cacheEnabled bool             // enable result caching
 	cacheMaxSize int              // max cache entries (0 = default 1024)
 	cache        map[string]Value // cached function results
@@ -67,35 +76,45 @@ func NewExecutionContext(fields ...map[string]Value) *ExecutionContext {
 // SetField sets a field value in the execution context.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetField(name string, value Value) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.fields[name] = value
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // SetStringField sets a string field value in the execution context.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetStringField(name string, value string) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.fields[name] = StringValue(value)
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // SetIntField sets an integer field value in the execution context.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetIntField(name string, value int64) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.fields[name] = IntValue(value)
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // SetFloatField sets a floating-point field value in the execution context.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetFloatField(name string, value float64) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.fields[name] = FloatValue(value)
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // SetBoolField sets a boolean field value in the execution context.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetBoolField(name string, value bool) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.fields[name] = BoolValue(value)
+	ctx.mu.Unlock()
 	return ctx
 }
 
@@ -105,7 +124,9 @@ func (ctx *ExecutionContext) SetBoolField(name string, value bool) *ExecutionCon
 func (ctx *ExecutionContext) SetIPField(name string, value string) *ExecutionContext {
 	ip := NormalizeIP(net.ParseIP(value))
 	if ip != nil {
+		ctx.mu.Lock()
 		ctx.fields[name] = IPValue{IP: ip}
+		ctx.mu.Unlock()
 	}
 	return ctx
 }
@@ -113,21 +134,27 @@ func (ctx *ExecutionContext) SetIPField(name string, value string) *ExecutionCon
 // SetBytesField sets a bytes field value in the execution context.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetBytesField(name string, value []byte) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.fields[name] = BytesValue(value)
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // SetTimeField sets a time field value in the execution context.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetTimeField(name string, value time.Time) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.fields[name] = NewTimeValue(value.UTC())
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // SetDurationField sets a duration field value in the execution context.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetDurationField(name string, value time.Duration) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.fields[name] = DurationValue(value)
+	ctx.mu.Unlock()
 	return ctx
 }
 
@@ -135,14 +162,19 @@ func (ctx *ExecutionContext) SetDurationField(name string, value time.Duration) 
 // If not set, now() returns time.Now().UTC().
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) WithNow(fn func() time.Time) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.nowFunc = fn
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // now returns the current time from the injectable clock or time.Now().UTC().
 func (ctx *ExecutionContext) now() time.Time {
-	if ctx.nowFunc != nil {
-		return ctx.nowFunc()
+	ctx.mu.RLock()
+	fn := ctx.nowFunc
+	ctx.mu.RUnlock()
+	if fn != nil {
+		return fn()
 	}
 	return time.Now().UTC()
 }
@@ -155,14 +187,18 @@ func (ctx *ExecutionContext) SetMapField(name string, value map[string]string) *
 	for k, v := range value {
 		m[k] = StringValue(v)
 	}
+	ctx.mu.Lock()
 	ctx.fields[name] = m
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // SetMapFieldValues sets a map field with Value types in the execution context.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetMapFieldValues(name string, value map[string]Value) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.fields[name] = MapValue(value)
+	ctx.mu.Unlock()
 	return ctx
 }
 
@@ -175,14 +211,18 @@ func (ctx *ExecutionContext) SetMapArrayField(name string, value map[string][]Va
 	for k, values := range value {
 		m[k] = ArrayValue(values)
 	}
+	ctx.mu.Lock()
 	ctx.fields[name] = m
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // GetField retrieves a field value from the execution context.
 // Returns the value and true if found, or nil and false if not found.
 func (ctx *ExecutionContext) GetField(name string) (Value, bool) {
+	ctx.mu.RLock()
 	val, ok := ctx.fields[name]
+	ctx.mu.RUnlock()
 	return val, ok
 }
 
@@ -193,7 +233,9 @@ func (ctx *ExecutionContext) SetArrayField(name string, values []string) *Execut
 	for i, v := range values {
 		arr[i] = StringValue(v)
 	}
+	ctx.mu.Lock()
 	ctx.fields[name] = arr
+	ctx.mu.Unlock()
 	return ctx
 }
 
@@ -204,7 +246,9 @@ func (ctx *ExecutionContext) SetIntArrayField(name string, values []int64) *Exec
 	for i, v := range values {
 		arr[i] = IntValue(v)
 	}
+	ctx.mu.Lock()
 	ctx.fields[name] = arr
+	ctx.mu.Unlock()
 	return ctx
 }
 
@@ -215,7 +259,9 @@ func (ctx *ExecutionContext) SetList(name string, values []string) *ExecutionCon
 	for i, v := range values {
 		arr[i] = StringValue(v)
 	}
+	ctx.mu.Lock()
 	ctx.lists[name] = arr
+	ctx.mu.Unlock()
 	return ctx
 }
 
@@ -233,14 +279,18 @@ func (ctx *ExecutionContext) SetIPList(name string, values []string) *ExecutionC
 			arr = append(arr, IPValue{IP: ip})
 		}
 	}
+	ctx.mu.Lock()
 	ctx.lists[name] = arr
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // GetList retrieves a list from the execution context.
 // Returns the list and true if found, or nil and false if not found.
 func (ctx *ExecutionContext) GetList(name string) (ArrayValue, bool) {
+	ctx.mu.RLock()
 	val, ok := ctx.lists[name]
+	ctx.mu.RUnlock()
 	return val, ok
 }
 
@@ -252,14 +302,18 @@ func (ctx *ExecutionContext) SetTable(name string, data map[string]string) *Exec
 	for k, v := range data {
 		m[k] = StringValue(v)
 	}
+	ctx.mu.Lock()
 	ctx.tables[name] = m
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // SetTableValues sets a lookup table with mixed value types.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetTableValues(name string, data map[string]Value) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.tables[name] = MapValue(data)
+	ctx.mu.Unlock()
 	return ctx
 }
 
@@ -274,7 +328,9 @@ func (ctx *ExecutionContext) SetTableList(name string, data map[string][]string)
 		}
 		m[k] = arr
 	}
+	ctx.mu.Lock()
 	ctx.tables[name] = m
+	ctx.mu.Unlock()
 	return ctx
 }
 
@@ -296,14 +352,18 @@ func (ctx *ExecutionContext) SetTableIPList(name string, data map[string][]strin
 		}
 		m[k] = arr
 	}
+	ctx.mu.Lock()
 	ctx.tables[name] = m
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // GetTable retrieves a lookup table from the execution context.
 // Returns the table and true if found, or nil and false if not found.
 func (ctx *ExecutionContext) GetTable(name string) (MapValue, bool) {
+	ctx.mu.RLock()
 	val, ok := ctx.tables[name]
+	ctx.mu.RUnlock()
 	return val, ok
 }
 
@@ -311,16 +371,20 @@ func (ctx *ExecutionContext) GetTable(name string) (MapValue, bool) {
 // The handler will be called when the function is invoked in a filter expression.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) SetFunc(name string, handler FuncHandler) *ExecutionContext {
+	ctx.mu.Lock()
 	if ctx.funcs == nil {
 		ctx.funcs = make(map[string]FuncHandler)
 	}
 	ctx.funcs[strings.ToLower(name)] = handler
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // GetFunc retrieves a user-defined function handler from the execution context.
 // Returns the handler and true if found, or nil and false if not found.
 func (ctx *ExecutionContext) GetFunc(name string) (FuncHandler, bool) {
+	ctx.mu.RLock()
+	defer ctx.mu.RUnlock()
 	if ctx.funcs == nil {
 		return nil, false
 	}
@@ -332,23 +396,31 @@ func (ctx *ExecutionContext) GetFunc(name string) (FuncHandler, bool) {
 // The evaluator checks for context cancellation at key evaluation points.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) WithContext(goCtx context.Context) *ExecutionContext {
+	ctx.mu.Lock()
 	ctx.goCtx = goCtx
+	ctx.mu.Unlock()
 	return ctx
 }
 
 // EnableTrace enables expression evaluation tracing.
 // After Execute, call Trace() to retrieve the evaluation trace tree.
+// When tracing is enabled, concurrent Execute calls are serialized for the trace operations.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) EnableTrace() *ExecutionContext {
+	ctx.traceMu.Lock()
 	ctx.traceRoot = &TraceNode{Expression: "root"}
 	ctx.traceStack = []*TraceNode{ctx.traceRoot}
+	ctx.traceMu.Unlock()
 	return ctx
 }
 
 // Trace returns the evaluation trace tree after Execute completes.
 // Returns nil if tracing was not enabled.
 func (ctx *ExecutionContext) Trace() *TraceNode {
-	return ctx.traceRoot
+	ctx.traceMu.Lock()
+	root := ctx.traceRoot
+	ctx.traceMu.Unlock()
+	return root
 }
 
 // EnableCache enables result caching for user-defined function calls.
@@ -358,9 +430,11 @@ func (ctx *ExecutionContext) Trace() *TraceNode {
 // Default max size is 1024 entries; use SetCacheMaxSize to change.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) EnableCache() *ExecutionContext {
+	ctx.cacheMu.Lock()
 	ctx.cacheEnabled = true
 	ctx.cacheMaxSize = defaultCacheMaxSize
 	ctx.cache = make(map[string]Value)
+	ctx.cacheMu.Unlock()
 	return ctx
 }
 
@@ -372,7 +446,9 @@ func (ctx *ExecutionContext) SetCacheMaxSize(size int) *ExecutionContext {
 	if size <= 0 {
 		size = defaultCacheMaxSize
 	}
+	ctx.cacheMu.Lock()
 	ctx.cacheMaxSize = size
+	ctx.cacheMu.Unlock()
 	return ctx
 }
 
@@ -380,34 +456,45 @@ func (ctx *ExecutionContext) SetCacheMaxSize(size int) *ExecutionContext {
 // Useful between batches of rule evaluations to free memory.
 // Returns the context to allow method chaining.
 func (ctx *ExecutionContext) ResetCache() *ExecutionContext {
+	ctx.cacheMu.Lock()
 	if ctx.cache != nil {
 		clear(ctx.cache)
 	}
+	ctx.cacheMu.Unlock()
 	return ctx
 }
 
 // CacheLen returns the number of entries currently in the cache.
 func (ctx *ExecutionContext) CacheLen() int {
-	return len(ctx.cache)
+	ctx.cacheMu.Lock()
+	n := len(ctx.cache)
+	ctx.cacheMu.Unlock()
+	return n
 }
 
 // Context returns the Go context associated with this execution context.
 // Returns context.Background() if no context was set via WithContext.
 func (ctx *ExecutionContext) Context() context.Context {
-	if ctx.goCtx == nil {
+	ctx.mu.RLock()
+	goCtx := ctx.goCtx
+	ctx.mu.RUnlock()
+	if goCtx == nil {
 		return context.Background()
 	}
-	return ctx.goCtx
+	return goCtx
 }
 
 // checkContext checks if the Go context has been cancelled or timed out.
 func (ctx *ExecutionContext) checkContext() error {
-	if ctx.goCtx == nil {
+	ctx.mu.RLock()
+	goCtx := ctx.goCtx
+	ctx.mu.RUnlock()
+	if goCtx == nil {
 		return nil
 	}
 	select {
-	case <-ctx.goCtx.Done():
-		return ctx.goCtx.Err()
+	case <-goCtx.Done():
+		return goCtx.Err()
 	default:
 		return nil
 	}
@@ -415,63 +502,77 @@ func (ctx *ExecutionContext) checkContext() error {
 
 // traceEnabled returns true if tracing is active.
 func (ctx *ExecutionContext) traceEnabled() bool {
-	return ctx.traceRoot != nil
+	ctx.traceMu.Lock()
+	enabled := ctx.traceRoot != nil
+	ctx.traceMu.Unlock()
+	return enabled
 }
 
 // pushTrace starts tracing a sub-expression.
 func (ctx *ExecutionContext) pushTrace(expr string) {
+	ctx.traceMu.Lock()
 	node := &TraceNode{Expression: expr}
 	parent := ctx.traceStack[len(ctx.traceStack)-1]
 	parent.addChild(node)
 	ctx.traceStack = append(ctx.traceStack, node)
+	ctx.traceMu.Unlock()
 }
 
 // popTrace completes tracing a sub-expression with its result.
 func (ctx *ExecutionContext) popTrace(result Value, dur time.Duration) {
+	ctx.traceMu.Lock()
 	node := ctx.traceStack[len(ctx.traceStack)-1]
 	ctx.traceStack = ctx.traceStack[:len(ctx.traceStack)-1]
 	if result != nil {
 		node.Result = result.String()
 	}
 	node.Duration = dur
+	ctx.traceMu.Unlock()
 }
 
 // getCached retrieves a cached function result.
 func (ctx *ExecutionContext) getCached(key string) (Value, bool) {
+	ctx.cacheMu.Lock()
 	if !ctx.cacheEnabled {
+		ctx.cacheMu.Unlock()
 		return nil, false
 	}
 	v, ok := ctx.cache[key]
+	ctx.cacheMu.Unlock()
 	return v, ok
 }
 
 // setCache stores a function result in the cache, respecting max size.
 func (ctx *ExecutionContext) setCache(key string, val Value) {
-	if !ctx.cacheEnabled {
+	ctx.cacheMu.Lock()
+	if !ctx.cacheEnabled || len(ctx.cache) >= ctx.cacheMaxSize {
+		ctx.cacheMu.Unlock()
 		return
 	}
-	if len(ctx.cache) >= ctx.cacheMaxSize {
-		return // cache full, skip new entries
-	}
 	ctx.cache[key] = val
+	ctx.cacheMu.Unlock()
 }
 
 // Export returns a flat map of field names to their values for use in audit logs.
 // The output uses native Go types that json.Marshal handles directly.
 func (ctx *ExecutionContext) Export() map[string]any {
+	ctx.mu.RLock()
 	result := make(map[string]any, len(ctx.fields))
 	for name, val := range ctx.fields {
 		result[name] = exportValue(val)
 	}
+	ctx.mu.RUnlock()
 	return result
 }
 
 // ExportLists returns a flat map of list names to their values for use in audit logs.
 func (ctx *ExecutionContext) ExportLists() map[string]any {
+	ctx.mu.RLock()
 	result := make(map[string]any, len(ctx.lists))
 	for name, list := range ctx.lists {
 		result[name] = exportValue(list)
 	}
+	ctx.mu.RUnlock()
 	return result
 }
 

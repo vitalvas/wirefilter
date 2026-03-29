@@ -8,7 +8,6 @@ import (
 	"math"
 	"net"
 	"regexp"
-	"sync"
 )
 
 // Binary encoding format:
@@ -61,11 +60,15 @@ var (
 // The resulting bytes can be stored externally and later decoded with UnmarshalBinary
 // to reconstruct the filter without re-parsing the expression.
 func (f *Filter) MarshalBinary() ([]byte, error) {
+	f.mu.RLock()
+	expr := f.expr
+	f.mu.RUnlock()
+
 	w := &encWriter{buf: make([]byte, 0, 256)}
 	w.writeBytes([]byte(encodingMagic))
 	w.writeByte(encodingVersion)
 
-	if err := w.writeExpr(f.expr); err != nil {
+	if err := w.writeExpr(expr); err != nil {
 		return nil, err
 	}
 
@@ -92,12 +95,18 @@ func (f *Filter) UnmarshalBinary(data []byte) error {
 		return err
 	}
 
+	f.mu.Lock()
 	f.expr = expr
 	f.schema = nil
+	f.mu.Unlock()
+
+	f.regexMu.Lock()
 	f.regexCache = make(map[string]*regexp.Regexp)
+	f.regexMu.Unlock()
+
+	f.cidrMu.Lock()
 	f.cidrCache = make(map[string]*net.IPNet)
-	f.regexMu = sync.RWMutex{}
-	f.cidrMu = sync.RWMutex{}
+	f.cidrMu.Unlock()
 
 	return nil
 }

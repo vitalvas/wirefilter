@@ -39,6 +39,10 @@ type FuncSignature struct {
 // Schema defines the structure of fields that can be used in filter expressions.
 // It provides validation to ensure that filter expressions only reference defined fields,
 // operators are valid for field types, and expression complexity is within limits.
+//
+// Schema is NOT safe for concurrent modification. Configure the schema fully before
+// passing it to Compile. Once compiled, the schema is only read and can be shared
+// safely across goroutines.
 type Schema struct {
 	fields        map[string]Field
 	functionMode  FunctionMode

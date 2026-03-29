@@ -3,6 +3,7 @@ package wirefilter
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -1416,5 +1417,113 @@ func TestNowFunction(t *testing.T) {
 		result, err := filter.Execute(ctx)
 		assert.NoError(t, err)
 		assert.False(t, result)
+	})
+}
+
+func TestExecutionContextConcurrency(t *testing.T) {
+	t.Run("concurrent execute on shared context", func(t *testing.T) {
+		schema := NewSchema().
+			AddField("http.host", TypeString).
+			AddField("http.status", TypeInt)
+
+		filter, err := Compile(`http.host == "example.com" and http.status >= 400`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetStringField("http.host", "example.com").
+			SetIntField("http.status", 500)
+
+		var wg sync.WaitGroup
+		for range 100 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				result, err := filter.Execute(ctx)
+				assert.NoError(t, err)
+				assert.True(t, result)
+			}()
+		}
+		wg.Wait()
+	})
+
+	t.Run("concurrent execute with cache", func(t *testing.T) {
+		schema := NewSchema().
+			AddField("x", TypeString).
+			RegisterFunction("echo", TypeString, []Type{TypeString})
+
+		filter, err := Compile(`echo(x) == "hello"`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetStringField("x", "hello").
+			EnableCache().
+			SetFunc("echo", func(_ context.Context, args []Value) (Value, error) {
+				return args[0], nil
+			})
+
+		var wg sync.WaitGroup
+		for range 100 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				result, err := filter.Execute(ctx)
+				assert.NoError(t, err)
+				assert.True(t, result)
+			}()
+		}
+		wg.Wait()
+		assert.Equal(t, 1, ctx.CacheLen())
+	})
+
+	t.Run("concurrent set and get fields", func(t *testing.T) {
+		ctx := NewExecutionContext()
+
+		var wg sync.WaitGroup
+		for i := range 100 {
+			wg.Add(1)
+			go func(n int) {
+				defer wg.Done()
+				ctx.SetIntField("counter", int64(n))
+				ctx.GetField("counter")
+			}(i)
+		}
+		wg.Wait()
+
+		_, ok := ctx.GetField("counter")
+		assert.True(t, ok)
+	})
+
+	t.Run("concurrent execute different filters same context", func(t *testing.T) {
+		schema := NewSchema().
+			AddField("http.host", TypeString).
+			AddField("http.status", TypeInt)
+
+		filterHost, err := Compile(`http.host == "example.com"`, schema)
+		require.NoError(t, err)
+
+		filterStatus, err := Compile(`http.status >= 400`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().
+			SetStringField("http.host", "example.com").
+			SetIntField("http.status", 500)
+
+		var wg sync.WaitGroup
+		for range 50 {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				result, err := filterHost.Execute(ctx)
+				assert.NoError(t, err)
+				assert.True(t, result)
+			}()
+			go func() {
+				defer wg.Done()
+				result, err := filterStatus.Execute(ctx)
+				assert.NoError(t, err)
+				assert.True(t, result)
+			}()
+		}
+		wg.Wait()
 	})
 }

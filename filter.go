@@ -18,9 +18,11 @@ type RuleMeta struct {
 // Filter represents a compiled filter expression that can be executed against an execution context.
 // Filter is safe for concurrent use across goroutines.
 type Filter struct {
-	expr       Expression
-	schema     *Schema
-	meta       RuleMeta
+	mu     sync.RWMutex
+	expr   Expression
+	schema *Schema
+	meta   RuleMeta
+
 	regexCache map[string]*regexp.Regexp
 	regexMu    sync.RWMutex
 	cidrCache  map[string]*net.IPNet
@@ -31,23 +33,29 @@ type Filter struct {
 // The Tags map is defensively copied to prevent external mutation.
 // Returns the filter to allow method chaining.
 func (f *Filter) SetMeta(meta RuleMeta) *Filter {
-	f.meta = RuleMeta{ID: meta.ID}
+	m := RuleMeta{ID: meta.ID}
 	if meta.Tags != nil {
-		f.meta.Tags = make(map[string]string, len(meta.Tags))
+		m.Tags = make(map[string]string, len(meta.Tags))
 		for k, v := range meta.Tags {
-			f.meta.Tags[k] = v
+			m.Tags[k] = v
 		}
 	}
+	f.mu.Lock()
+	f.meta = m
+	f.mu.Unlock()
 	return f
 }
 
 // Meta returns the metadata attached to this filter.
 // The Tags map is defensively copied to prevent external mutation.
 func (f *Filter) Meta() RuleMeta {
-	m := RuleMeta{ID: f.meta.ID}
-	if f.meta.Tags != nil {
-		m.Tags = make(map[string]string, len(f.meta.Tags))
-		for k, v := range f.meta.Tags {
+	f.mu.RLock()
+	meta := f.meta
+	f.mu.RUnlock()
+	m := RuleMeta{ID: meta.ID}
+	if meta.Tags != nil {
+		m.Tags = make(map[string]string, len(meta.Tags))
+		for k, v := range meta.Tags {
 			m.Tags[k] = v
 		}
 	}
@@ -85,13 +93,20 @@ func Compile(filterStr string, schema *Schema) (*Filter, error) {
 // differ in whitespace, operator aliases (and vs &&), or formatting.
 // This can be used to deduplicate filter expressions.
 func (f *Filter) Hash() string {
-	data, err := f.MarshalBinary()
-	if err != nil {
+	f.mu.RLock()
+	expr := f.expr
+	f.mu.RUnlock()
+
+	w := &encWriter{buf: make([]byte, 0, 256)}
+	w.writeBytes([]byte(encodingMagic))
+	w.writeByte(encodingVersion)
+
+	if err := w.writeExpr(expr); err != nil {
 		return ""
 	}
 
 	h := fnv.New128a()
-	h.Write(data)
+	h.Write(w.buf)
 
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -104,7 +119,11 @@ func (f *Filter) Execute(ctx *ExecutionContext) (bool, error) {
 	if ctx == nil {
 		ctx = NewExecutionContext()
 	}
-	result, err := f.evaluate(f.expr, ctx)
+	f.mu.RLock()
+	expr := f.expr
+	f.mu.RUnlock()
+
+	result, err := f.evaluate(expr, ctx)
 	if err != nil {
 		return false, err
 	}

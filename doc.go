@@ -181,8 +181,7 @@
 //	}
 //	fmt.Println(result) // true
 //
-// Filter is safe for concurrent Execute calls across goroutines.
-// ExecutionContext is NOT safe for concurrent use.
+// Both Filter and ExecutionContext are safe for concurrent use across goroutines.
 //
 // # User-Defined Functions
 //
@@ -327,7 +326,9 @@
 //
 // # Concurrency
 //
-// Filter is safe for concurrent use across goroutines (regex and CIDR caches
-// are protected by sync.RWMutex). ExecutionContext must not be shared between
-// goroutines.
+// Both Filter and ExecutionContext are safe for concurrent use across goroutines.
+// Filter protects regex and CIDR caches with sync.RWMutex.
+// ExecutionContext protects data maps (fields, lists, tables, funcs) with sync.RWMutex,
+// and cache and trace state with dedicated sync.Mutex locks.
+// Multiple filters can be executed concurrently against the same context.
 package wirefilter

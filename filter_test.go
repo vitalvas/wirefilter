@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1684,4 +1685,81 @@ func TestPropertyTimeRangeContainment(t *testing.T) {
 		assert.True(t, result, "ts=%s should be in {%s..%s}",
 			mid.Format(time.RFC3339), start.Format(time.RFC3339), end.Format(time.RFC3339))
 	}
+}
+
+func TestFilterConcurrency(t *testing.T) {
+	t.Run("concurrent meta access", func(t *testing.T) {
+		schema := NewSchema().AddField("x", TypeInt)
+		filter, err := Compile(`x == 1`, schema)
+		require.NoError(t, err)
+
+		var wg sync.WaitGroup
+		for i := range 100 {
+			wg.Add(2)
+			go func(n int) {
+				defer wg.Done()
+				filter.SetMeta(RuleMeta{
+					ID:   fmt.Sprintf("rule-%d", n),
+					Tags: map[string]string{"i": fmt.Sprintf("%d", n)},
+				})
+			}(i)
+			go func() {
+				defer wg.Done()
+				m := filter.Meta()
+				_ = m.ID
+			}()
+		}
+		wg.Wait()
+	})
+
+	t.Run("concurrent hash and execute", func(t *testing.T) {
+		schema := NewSchema().AddField("x", TypeInt)
+		filter, err := Compile(`x > 0`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().SetIntField("x", 42)
+
+		var wg sync.WaitGroup
+		for range 100 {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				h := filter.Hash()
+				assert.NotEmpty(t, h)
+			}()
+			go func() {
+				defer wg.Done()
+				result, err := filter.Execute(ctx)
+				assert.NoError(t, err)
+				assert.True(t, result)
+			}()
+		}
+		wg.Wait()
+	})
+
+	t.Run("concurrent marshal and execute", func(t *testing.T) {
+		schema := NewSchema().AddField("x", TypeInt)
+		filter, err := Compile(`x == 1`, schema)
+		require.NoError(t, err)
+
+		ctx := NewExecutionContext().SetIntField("x", 1)
+
+		var wg sync.WaitGroup
+		for range 100 {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				data, err := filter.MarshalBinary()
+				assert.NoError(t, err)
+				assert.NotEmpty(t, data)
+			}()
+			go func() {
+				defer wg.Done()
+				result, err := filter.Execute(ctx)
+				assert.NoError(t, err)
+				assert.True(t, result)
+			}()
+		}
+		wg.Wait()
+	})
 }

@@ -42,7 +42,7 @@ inspired by Cloudflare's Wirefilter.
 - Configurable result caching for UDF calls
 - Context export for audit logging (`Export()`, `ExportLists()`)
 - Binary serialization for pre-compiled filter storage and fast loading
-- Thread-safe filter execution (concurrent `Execute()` calls)
+- Thread-safe `Filter` and `ExecutionContext` (concurrent `Execute()` calls on shared contexts)
 - Multi-error recovery in parser (reports multiple errors in a single pass)
 
 ## Installation
