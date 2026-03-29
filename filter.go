@@ -1,35 +1,3 @@
-// Package wirefilter implements a filtering expression language and execution engine.
-// It allows you to compile and evaluate filter expressions against runtime data.
-//
-// The filter language supports:
-//   - Logical operators: and, or, not, xor, &&, ||, !, ^^
-//   - Comparison operators: ==, !=, <, >, <=, >=
-//   - Array operators: === (all equal), !== (any not equal)
-//   - Membership operators: in, contains, matches (~)
-//   - Wildcard matching: wildcard, strict wildcard
-//   - Range expressions: {1..10}
-//   - Multiple data types: string, int, bool, IP, bytes, arrays, maps
-//
-// Example:
-//
-//	schema := wirefilter.NewSchema().
-//	    AddField("http.host", wirefilter.TypeString).
-//	    AddField("http.status", wirefilter.TypeInt)
-//
-//	filter, err := wirefilter.Compile(`http.host == "example.com" and http.status >= 400`, schema)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-//
-//	ctx := wirefilter.NewExecutionContext().
-//	    SetStringField("http.host", "example.com").
-//	    SetIntField("http.status", 500)
-//
-//	result, err := filter.Execute(ctx)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-//	fmt.Println(result) // true
 package wirefilter
 
 import (

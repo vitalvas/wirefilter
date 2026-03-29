@@ -6,34 +6,44 @@ inspired by Cloudflare's Wirefilter.
 
 ## Features
 
-- Logical operators: `and`, `or`, `not`, `xor`, `&&`, `||`, `!`, `^^`
+- Logical operators: `and`, `or`, `not`, `xor`, `&&`, `||`, `!`, `^^` (short-circuit evaluation)
 - Comparison operators: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- Arithmetic operators: `+`, `-`, `*`, `/`, `%` (with standard precedence)
 - Array operators: `===` (all equal), `!==` (any not equal)
 - Membership operators: `in`, `contains`, `matches` (`~`)
+- Negated membership: `not in`, `not contains`
 - Wildcard matching: `wildcard` (case-insensitive), `strict wildcard` (case-sensitive)
 - Field presence/absence checking
+- Field-to-field comparisons
 - Range expressions: `{1..10}`
 - Multiple data types: string, int, float, bool, IP, CIDR, bytes, arrays, maps, time, duration
-- Map field access with bracket notation
-- Array index access: `tags[0]`
+- Map field access with bracket notation: `map["key"]`
+- Array index access: `tags[0]` (negative/out-of-bounds return nil)
 - Array unpack operations: `tags[*] == "value"` (ANY semantics)
 - Raw strings: `r"..."` (no escape processing)
 - Custom lists: `$list_name` for external list references
 - Lookup tables: `$table_name[field]` for key-value lookups
-- Negated membership: `not in`, `not contains`
 - Native time and duration types with temporal arithmetic and `now()` built-in
-- Built-in functions: `lower()`, `upper()`, `len()`, `starts_with()`, `now()`, and more
-- User-defined functions: `maintenance()`, `get_score(domain)`, `is_tor(ip)`
-- Field-to-field comparisons
+- Negated duration literals: `-30m`, `-2d4h`
+- Type coercion: IP/CIDR/Time equality with string values
+- Built-in functions: `lower()`, `upper()`, `len()`, `starts_with()`, `now()`, and 30+ more
+- User-defined functions with compile-time signature validation
 - IP/CIDR matching for IPv4 and IPv6
-- Regular expression matching
+- Regular expression matching (can be disabled via `DisableRegex()`)
 - Schema validation for field references and operator-type compatibility
+- Compile-time type validation for typed arrays, maps, and UDF return types
+- Function availability control (allowlist/blocklist modes)
 - Expression complexity limits (max depth and node count)
+- Expression hashing for deduplication (`Hash()`)
 - Rule metadata (ID, tags)
 - Execution timeout via `context.Context`
+- Injectable clock via `WithNow` for deterministic testing
 - Expression evaluation tracing for debugging
 - Configurable result caching for UDF calls
+- Context export for audit logging (`Export()`, `ExportLists()`)
 - Binary serialization for pre-compiled filter storage and fast loading
+- Thread-safe filter execution (concurrent `Execute()` calls)
+- Multi-error recovery in parser (reports multiple errors in a single pass)
 
 ## Installation
 
@@ -574,6 +584,43 @@ _, err = wirefilter.Compile(hugeExpr, schema)
 
 Both limits default to zero (unlimited). Set them on the schema to enable.
 
+### Schema Inspection
+
+Query the schema for field definitions and function availability:
+
+```go
+field, ok := schema.GetField("http.host") // (Field, bool)
+// field.Name, field.Type, field.ElemType, field.ElemTyped
+
+allowed := schema.IsFunctionAllowed("lower") // bool
+```
+
+The `Field` struct contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Name` | `string` | Field name |
+| `Type` | `Type` | Field type (`TypeString`, `TypeInt`, etc.) |
+| `ElemType` | `Type` | Element type for typed arrays/maps (set via `AddArrayField`/`AddMapField`) |
+| `ElemTyped` | `bool` | True if `ElemType` was explicitly set |
+
+### Explicit Validation
+
+Validate an expression against the schema without compiling:
+
+```go
+lexer := wirefilter.NewLexer(expression)
+parser := wirefilter.NewParser(lexer)
+expr, err := parser.Parse()
+if err != nil {
+    log.Fatal(err)
+}
+
+if err := schema.Validate(expr); err != nil {
+    log.Fatal(err)
+}
+```
+
 ### Compiling a Filter
 
 Parse and validate a filter expression:
@@ -596,7 +643,17 @@ ctx := wirefilter.NewExecutionContext().
     SetStringField("http.host", "example.com").
     SetIntField("http.status", 200).
     SetBoolField("http.secure", true).
-    SetIPField("ip.src", "192.168.1.1")
+    SetIPField("ip.src", "192.168.1.1").
+    SetBytesField("body", []byte("raw data"))
+```
+
+All setter methods return `*ExecutionContext` for method chaining.
+
+For a generic value or custom type:
+
+```go
+ctx := wirefilter.NewExecutionContext().
+    SetField("custom", wirefilter.StringValue("value"))
 ```
 
 #### Setting Map Fields
@@ -695,6 +752,32 @@ ctx := wirefilter.NewExecutionContext().
 
 // Expression: ip.src in $blocked_ips
 // Expression: ip.src not in $blocked_ips
+```
+
+#### Retrieving Values
+
+Retrieve fields, lists, tables, and functions from the execution context:
+
+```go
+val, ok := ctx.GetField("http.host")       // (Value, bool)
+list, ok := ctx.GetList("admin_roles")      // (ArrayValue, bool)
+table, ok := ctx.GetTable("geo")            // (MapValue, bool)
+handler, ok := ctx.GetFunc("get_score")     // (FuncHandler, bool)
+```
+
+#### Retrieving the Go Context
+
+```go
+goCtx := ctx.Context() // returns context.Background() if not set via WithContext
+```
+
+#### Cache Inspection
+
+```go
+ctx.EnableCache()
+// ... execute filters ...
+n := ctx.CacheLen() // number of cached function results
+ctx.ResetCache()    // clear cache
 ```
 
 ### User-Defined Functions
@@ -945,6 +1028,52 @@ exported := ctx.ExportLists()
 | `TypeMap` | Map of string keys to values | `{"key": "value"}` |
 | `TypeTime` | RFC 3339 timestamps | `2026-03-19T10:00:00Z` |
 | `TypeDuration` | Duration values | `30m`, `7d`, `1h30m` |
+
+### Value Interface
+
+All value types implement the `Value` interface:
+
+```go
+type Value interface {
+    Type() Type
+    Equal(other Value) bool
+    String() string
+    IsTruthy() bool
+}
+```
+
+Concrete value types: `StringValue`, `IntValue`, `FloatValue`, `BoolValue`,
+`IPValue`, `CIDRValue`, `BytesValue`, `ArrayValue`, `MapValue`, `TimeValue`,
+`DurationValue`.
+
+Additional types used internally and in advanced scenarios:
+
+- `IntervalValue` - non-materialized range for `in` membership checks (created via `NewIntInterval`, `NewTimeInterval`, `NewDurationInterval`)
+- `UnpackedArrayValue` - intermediate type for `array[*]` unpack operations
+
+### Value Type Methods
+
+Some value types provide additional methods beyond the `Value` interface:
+
+| Type | Method | Description |
+|------|--------|-------------|
+| `ArrayValue` | `Contains(v Value) bool` | Check if array contains a value |
+| `MapValue` | `Get(key string) (Value, bool)` | Retrieve a value by key |
+| `CIDRValue` | `Contains(ip net.IP) bool` | Check if IP is in the CIDR range |
+| `TimeValue` | `GoTime() time.Time` | Convert to `time.Time` |
+
+### Value Constructors
+
+```go
+// Time values
+tv := wirefilter.NewTimeValue(time.Now())  // TimeValue from time.Time
+t := tv.GoTime()                            // back to time.Time
+
+// Interval values (for range membership checks)
+wirefilter.NewIntInterval(wirefilter.IntValue(1), wirefilter.IntValue(100))
+wirefilter.NewTimeInterval(start, end)
+wirefilter.NewDurationInterval(start, end)
+```
 
 ## Operators
 
@@ -1439,6 +1568,115 @@ The `Filter` type implements the standard `encoding.BinaryMarshaler` and
 Regex and CIDR caches are rebuilt lazily on first use after deserialization.
 Schema validation is not re-applied; the filter is assumed to have been
 validated at compile time.
+
+## Helper Functions
+
+Utility functions for working with IP addresses and regex patterns:
+
+```go
+// Normalize an IP address to 16-byte representation
+ip := wirefilter.NormalizeIP(net.ParseIP("192.168.1.1"))
+
+// Check IP version
+wirefilter.IsIPv4(ip) // true
+wirefilter.IsIPv6(ip) // false
+
+// Check if an IP is in a CIDR range
+match, err := wirefilter.IPInCIDR(ip, "192.168.0.0/16") // true, nil
+
+// Match a string against a regex pattern
+match, err := wirefilter.MatchesRegex("hello world", "^hello.*") // true, nil
+```
+
+## Lexer and Parser
+
+The lexer and parser are exported for advanced use cases such as custom validation,
+AST inspection, or building tools on top of wirefilter expressions.
+
+### Lexer
+
+Tokenize a filter expression:
+
+```go
+lexer := wirefilter.NewLexer(`http.host == "example.com" and status >= 400`)
+
+for {
+    tok := lexer.NextToken()
+    if tok.Type == wirefilter.TokenEOF {
+        break
+    }
+    fmt.Printf("%s: %q\n", tok.Type, tok.Value)
+}
+```
+
+### Parser
+
+Parse tokens into an AST:
+
+```go
+lexer := wirefilter.NewLexer(expression)
+parser := wirefilter.NewParser(lexer)
+
+expr, err := parser.Parse()
+if err != nil {
+    // err may contain multiple parse errors (multi-error recovery)
+    log.Fatal(err)
+}
+
+// Access individual parse errors
+for _, e := range parser.Errors() {
+    fmt.Println(e)
+}
+```
+
+### AST Node Types
+
+The parser produces an AST composed of the following expression types:
+
+| Type | Description | Example Expression |
+|------|-------------|--------------------|
+| `BinaryExpr` | Binary operation (left, operator, right) | `a == b`, `x and y` |
+| `UnaryExpr` | Unary operation (operator, operand) | `not x`, `!a` |
+| `FieldExpr` | Field reference | `http.host` |
+| `LiteralExpr` | Literal value | `"hello"`, `200`, `true` |
+| `ArrayExpr` | Array literal | `{1, 2, 3}` |
+| `RangeExpr` | Range expression (start, end) | `1..100` |
+| `IndexExpr` | Index access (object, index) | `map["key"]`, `arr[0]` |
+| `UnpackExpr` | Array unpack (array) | `tags[*]` |
+| `ListRefExpr` | Custom list reference | `$blocked_hosts` |
+| `FunctionCallExpr` | Function call (name, arguments) | `lower(name)` |
+
+All expression types implement the `Expression` interface.
+
+### Operator Precedence
+
+From lowest to highest:
+
+| Level | Operators |
+|-------|-----------|
+| `OR` | `or`, `\|\|` |
+| `XOR` | `xor`, `^^` |
+| `AND` | `and`, `&&` |
+| `PREFIX` | `not`, `!` |
+| `EQUALS` | `==`, `!=`, `===`, `!==` |
+| `COMPARE` | `<`, `>`, `<=`, `>=` |
+| `MEMBERSHIP` | `in`, `contains`, `matches`, `wildcard`, `strict wildcard` |
+| `SUM` | `+`, `-` |
+| `PRODUCT` | `*`, `/`, `%` |
+
+### Function Signature Type
+
+The `FuncSignature` struct describes a user-defined function's compile-time signature:
+
+```go
+type FuncSignature struct {
+    ArgTypes   []Type // expected argument types (nil means any count/type)
+    ReturnType Type   // return type for schema validation
+}
+```
+
+When `ArgTypes` is `nil`, argument validation is skipped. Otherwise, the compiler
+checks both the argument count and types at compile time.
 
 ## Performance
 
