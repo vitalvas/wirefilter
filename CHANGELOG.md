@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/vitalvas/wirefilter/compare/v0.3.0...v0.4.0) (2026-03-29)
+
+
+### Features
+
+* add examples for advanced features ([61723b1](https://github.com/vitalvas/wirefilter/commit/61723b1fc75ada90c5dcdf9398ac8febb6704b7c))
+* add materialized data types for performance ([b535e64](https://github.com/vitalvas/wirefilter/commit/b535e648c511b9e03e0f0cbd8205dd252be8a264))
+* make Filter and ExecutionContext fully concurrent-safe ([403ba1c](https://github.com/vitalvas/wirefilter/commit/403ba1c48dd8eef7f8757a05f9387c5a6cac8b82))
+* reduce heap allocations in evaluation hot path ([066a802](https://github.com/vitalvas/wirefilter/commit/066a802a8410c846bdf50025e3ea7b532864d7ea))
+* support field maps in NewExecutionContext ([65e03ba](https://github.com/vitalvas/wirefilter/commit/65e03baec208ce94821aff286264a7fba7a5fdeb))
+
+
+### Bug Fixes
+
+* harden for production safety ([87e87d4](https://github.com/vitalvas/wirefilter/commit/87e87d43bf878675bb7cb9617ce5ee889dc02bf9))
+
 ## [0.3.0](https://github.com/vitalvas/wirefilter/compare/v0.2.0...v0.3.0) (2026-03-21)
 
 
