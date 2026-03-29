@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0](https://github.com/vitalvas/wirefilter/compare/v0.4.0...v1.0.0) (2026-03-29)
+
+
+### Miscellaneous Chores
+
+* release 1.0.0 ([2f66a38](https://github.com/vitalvas/wirefilter/commit/2f66a38aeb2a3b3b42cd6b9e498ee1eb8f7083be))
+
 ## [0.4.0](https://github.com/vitalvas/wirefilter/compare/v0.3.0...v0.4.0) (2026-03-29)
 
 
