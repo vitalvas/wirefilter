@@ -104,6 +104,40 @@ func TestArithmeticOperators(t *testing.T) {
 		assert.True(t, result)
 	})
 
+	t.Run("arithmetic precedence and associativity", func(t *testing.T) {
+		tests := []struct {
+			name string
+			expr string
+		}{
+			{"multiplication before addition", `2 + 2 * 2 == 6`},
+			{"multiplication on both sides of addition", `2 * 2 + 2 * 2 == 8`},
+			{"multiplication before subtraction", `10 - 3 * 2 == 4`},
+			{"division before addition", `8 + 8 / 2 == 12`},
+			{"modulo before addition", `8 + 7 % 4 == 11`},
+			{"parentheses before multiplication", `(2 + 3) * 4 == 20`},
+			{"addition and subtraction left associative", `10 - 3 + 2 == 9`},
+			{"multiplication and division left associative", `16 / 4 * 2 == 8`},
+			{"division and modulo left associative", `20 / 5 % 3 == 1`},
+			{"modulo and multiplication left associative", `20 % 6 * 3 == 6`},
+			{"nested parenthesized arithmetic", `2 * (3 + 4) % 5 == 4`},
+			{"negative literal before multiplication", `-2 * 3 + 10 == 4`},
+			{"negative literal after multiplication", `2 * -3 + 10 == 4`},
+			{"float arithmetic precedence", `1.5 + 2.5 * 2 == 6.5`},
+			{"duration arithmetic precedence", `30m + 15m * 2 == 1h`},
+			{"arithmetic before comparison", `2 + 3 * 4 > 13`},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				f, err := Compile(tt.expr, nil)
+				require.NoError(t, err)
+				result, err := f.Execute(NewExecutionContext())
+				require.NoError(t, err)
+				assert.True(t, result)
+			})
+		}
+	})
+
 	t.Run("arithmetic in comparison", func(t *testing.T) {
 		f, _ := Compile(`x * 2 > 5`, nil)
 		ctx := NewExecutionContext().SetIntField("x", 3)
