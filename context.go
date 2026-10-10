@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -93,19 +94,19 @@ func (ctx *ExecutionContext) Snapshot() *ExecutionContext {
 	ctx.readLock()
 	fields := make(map[string]Value, len(ctx.fields))
 	for k, v := range ctx.fields {
-		fields[k] = v
+		fields[k] = cloneValue(v)
 	}
 	lists := make(map[string]ArrayValue, len(ctx.lists))
 	for k, v := range ctx.lists {
-		lists[k] = v
+		lists[k] = cloneArray(v)
 	}
 	sets := make(map[string]SetValue, len(ctx.sets))
-	for k, v := range ctx.sets {
-		sets[k] = v
+	for k := range ctx.sets {
+		sets[k] = NewSetValue(lists[k])
 	}
 	tables := make(map[string]MapValue, len(ctx.tables))
 	for k, v := range ctx.tables {
-		tables[k] = v
+		tables[k] = cloneValue(v).(MapValue)
 	}
 	var funcs map[string]FuncHandler
 	if ctx.funcs != nil {
@@ -339,7 +340,16 @@ func (ctx *ExecutionContext) SetMapArrayField(name string, value map[string][]Va
 
 // GetField retrieves a field value from the execution context.
 // Returns the value and true if found, or nil and false if not found.
+// On snapshots, mutable built-in values are defensively copied.
 func (ctx *ExecutionContext) GetField(name string) (Value, bool) {
+	val, ok := ctx.getField(name)
+	if ctx.frozen {
+		val = cloneValue(val)
+	}
+	return val, ok
+}
+
+func (ctx *ExecutionContext) getField(name string) (Value, bool) {
 	ctx.readLock()
 	val, ok := ctx.fields[name]
 	ctx.readUnlock()
@@ -427,7 +437,16 @@ func (ctx *ExecutionContext) SetIPList(name string, values []string) *ExecutionC
 
 // GetList retrieves a list from the execution context.
 // Returns the list and true if found, or nil and false if not found.
+// On snapshots, the returned list is defensively copied.
 func (ctx *ExecutionContext) GetList(name string) (ArrayValue, bool) {
+	val, ok := ctx.getList(name)
+	if ctx.frozen {
+		val = cloneArray(val)
+	}
+	return val, ok
+}
+
+func (ctx *ExecutionContext) getList(name string) (ArrayValue, bool) {
 	ctx.readLock()
 	val, ok := ctx.lists[name]
 	ctx.readUnlock()
@@ -517,7 +536,16 @@ func (ctx *ExecutionContext) SetTableIPList(name string, data map[string][]strin
 
 // GetTable retrieves a lookup table from the execution context.
 // Returns the table and true if found, or nil and false if not found.
+// On snapshots, the returned table is defensively copied.
 func (ctx *ExecutionContext) GetTable(name string) (MapValue, bool) {
+	val, ok := ctx.getTable(name)
+	if ctx.frozen {
+		val = cloneValue(val).(MapValue)
+	}
+	return val, ok
+}
+
+func (ctx *ExecutionContext) getTable(name string) (MapValue, bool) {
 	ctx.readLock()
 	val, ok := ctx.tables[name]
 	ctx.readUnlock()
@@ -794,7 +822,7 @@ var cacheKeyPool = sync.Pool{
 func cacheKey(name string, args []Value) string {
 	sb := cacheKeyPool.Get().(*strings.Builder)
 	sb.Reset()
-	sb.WriteString(name)
+	sb.WriteString(strconv.Quote(name))
 	for _, arg := range args {
 		sb.WriteByte(':')
 		writeCacheKeyValue(sb, arg)
@@ -811,9 +839,15 @@ func writeCacheKeyValue(sb *strings.Builder, v Value) {
 		sb.WriteString("nil")
 		return
 	}
+	if arr, ok := arrayValue(v); ok {
+		v = arr
+	}
 	sb.WriteString(v.Type().String())
 	sb.WriteByte('=')
 	switch val := v.(type) {
+	case DurationValue:
+		// Duration.String is intended for display, rather than lossless identity.
+		sb.WriteString(strconv.FormatInt(int64(val), 10))
 	case ArrayValue:
 		sb.WriteByte('[')
 		for i, elem := range val {
@@ -834,12 +868,64 @@ func writeCacheKeyValue(sb *strings.Builder, v Value) {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(k)
+			sb.WriteString(strconv.Quote(k))
 			sb.WriteByte(':')
 			writeCacheKeyValue(sb, val[k])
 		}
 		sb.WriteByte('}')
 	default:
-		sb.WriteString(v.String())
+		sb.WriteString(strconv.Quote(v.String()))
 	}
+}
+
+// cloneValue isolates mutable built-in values. Custom Value implementations
+// should be immutable, as the Value interface does not define a cloning method.
+func cloneValue(v Value) Value {
+	switch val := v.(type) {
+	case ArrayValue:
+		return cloneArray(val)
+	case MapValue:
+		if val == nil {
+			return MapValue(nil)
+		}
+		m := make(MapValue, len(val))
+		for k, elem := range val {
+			m[k] = cloneValue(elem)
+		}
+		return m
+	case BytesValue:
+		if val == nil {
+			return BytesValue(nil)
+		}
+		cloned := make(BytesValue, len(val))
+		copy(cloned, val)
+		return cloned
+	case IPValue:
+		return IPValue{IP: append(net.IP(nil), val.IP...)}
+	case CIDRValue:
+		if val.IPNet == nil {
+			return val
+		}
+		return CIDRValue{IPNet: &net.IPNet{
+			IP:   append(net.IP(nil), val.IPNet.IP...),
+			Mask: append(net.IPMask(nil), val.IPNet.Mask...),
+		}}
+	case SetValue:
+		return NewSetValue(cloneArray(val.Array))
+	case UnpackedArrayValue:
+		return UnpackedArrayValue{Array: cloneArray(val.Array)}
+	default:
+		return v
+	}
+}
+
+func cloneArray(a ArrayValue) ArrayValue {
+	if a == nil {
+		return nil
+	}
+	cloned := make(ArrayValue, len(a))
+	for i, v := range a {
+		cloned[i] = cloneValue(v)
+	}
+	return cloned
 }

@@ -2,9 +2,12 @@ package wirefilter
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net"
 	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1489,7 +1492,7 @@ func TestFilterEval(t *testing.T) {
 
 		result, err := filter.Execute(ctx)
 		assert.NoError(t, err)
-		assert.False(t, result)
+		assert.True(t, result)
 	})
 
 	t.Run("invalid IP field", func(t *testing.T) {
@@ -4121,4 +4124,107 @@ func TestNegatedDuration(t *testing.T) {
 		d := DurationValue(-7*24*time.Hour - 12*time.Hour - 30*time.Minute)
 		assert.Equal(t, "-7d12h30m", d.String())
 	})
+}
+
+func TestPromotedListArrayOperations(t *testing.T) {
+	for _, size := range []int{15, 16, 17} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			roles := make([]string, size)
+			for i := range roles {
+				roles[i] = "admin"
+			}
+			ctx := NewExecutionContext().SetList("roles", roles).SetArrayField("values", roles).
+				SetFunc("array_length", func(_ context.Context, args []Value) (Value, error) {
+					return IntValue(len(args[0].(ArrayValue))), nil
+				})
+			for _, expr := range []string{
+				`$roles[0] == "admin"`, `$roles[*] == "admin"`,
+				`values in $roles`, `$roles in values`,
+				`values contains $roles`, `$roles contains values`,
+				`values == $roles`, `$roles == values`,
+				`$roles === "admin"`, `$roles !== "guest"`,
+				`has_value($roles, "admin")`, `contains_any($roles, values)`,
+				`contains_all($roles, values)`, `contains_all(values, $roles)`,
+				fmt.Sprintf(`len($roles) == %d`, size),
+				fmt.Sprintf(`count($roles) == %d`, size),
+				fmt.Sprintf(`array_length($roles) == %d`, size),
+				fmt.Sprintf(`len(intersection($roles, values)) == %d`, size),
+				fmt.Sprintf(`join($roles, ",") == %s`, strconv.Quote(strings.Join(roles, ","))),
+			} {
+				requireMatch(t, expr, ctx, true)
+			}
+			requireMatch(t, `$roles[-1]`, ctx, false)
+			requireMatch(t, fmt.Sprintf(`$roles[%d]`, size), ctx, false)
+			requireMatch(t, `difference($roles, values) == split("", "")`, ctx, true)
+		})
+	}
+}
+
+func TestArrayRangeOperations(t *testing.T) {
+	for _, tc := range []struct {
+		expr  string
+		ports []int64
+		want  bool
+	}{
+		{`ports in {80..90}`, []int64{85}, true},
+		{`ports in {80..90}`, []int64{79, 91}, false},
+		{`ports in {80..90}`, nil, false},
+		{`ports contains {80..82}`, []int64{80, 81, 82}, true},
+		{`ports contains {80..82}`, []int64{80, 82, 82}, false},
+		{`ports contains {82..80}`, nil, true},
+		{`ports contains {1..1000000000}`, []int64{1}, false},
+		{`ports contains {9223372036854775806..9223372036854775807}`, []int64{math.MaxInt64 - 1, math.MaxInt64}, true},
+	} {
+		t.Run(fmt.Sprintf("%s/%v", tc.expr, tc.ports), func(t *testing.T) {
+			requireMatch(t, tc.expr, NewExecutionContext().SetIntArrayField("ports", tc.ports), tc.want)
+		})
+	}
+	arr := ArrayValue{NewIntInterval(1, 3), IntValue(4), NewIntInterval(5, 10)}
+	require.True(t, arr.Contains(NewIntInterval(1, 10)))
+	require.True(t, arr.Contains(IntValue(2)))
+	require.False(t, arr.Contains(IntValue(11)))
+	require.False(t, arr.Contains(NewIntInterval(1, 11)))
+	for _, scalar := range []Value{IntValue(1), TimeValue(1), DurationValue(1)} {
+		iv := IntervalValue{start: 1, end: 2, elemType: scalar.Type()}
+		require.False(t, scalar.Equal(iv))
+		require.False(t, iv.Equal(scalar))
+		require.True(t, ArrayValue{iv}.Contains(scalar))
+		require.False(t, iv.Contains(nil))
+	}
+	// Nested array elements retain ordinary equality-based membership.
+	nested := ArrayValue{ArrayValue{StringValue("a"), StringValue("b")}}
+	ctx := NewExecutionContext().SetField("left", nested).SetField("right", nested)
+	requireMatch(t, `left in right`, ctx, true)
+	ctx.SetField("right", NewSetValue(nested))
+	requireMatch(t, `left in right`, ctx, true)
+}
+
+func TestTimeOrderingWithoutOverflow(t *testing.T) {
+	ctx := NewExecutionContext().SetTimeField("early", time.Date(1700, 1, 1, 0, 0, 0, 0, time.UTC)).
+		SetTimeField("late", time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC))
+	for _, expr := range []string{`early < late`, `early <= late`, `late > early`, `late >= early`, `early <= early`, `late >= late`} {
+		requireMatch(t, expr, ctx, true)
+	}
+	for _, expr := range []string{`early > late`, `early >= late`, `late < early`, `late <= early`} {
+		requireMatch(t, expr, ctx, false)
+	}
+}
+
+func TestBytesContainment(t *testing.T) {
+	for _, tc := range []struct {
+		data   []byte
+		needle Value
+		want   bool
+	}{
+		{[]byte("abcdef"), BytesValue("bcd"), true},
+		{[]byte("abcdef"), StringValue("bcd"), true},
+		{[]byte{0, 255, 1, 0}, BytesValue{255, 1}, true},
+		{[]byte("abcdef"), BytesValue("xyz"), false},
+		{nil, BytesValue{}, true},
+		{nil, BytesValue("x"), false},
+		{[]byte("abcdef"), IntValue(1), false},
+		{[]byte("abcdef"), nil, false},
+	} {
+		requireMatch(t, `data contains needle`, NewExecutionContext().SetBytesField("data", tc.data).SetField("needle", tc.needle), tc.want)
+	}
 }

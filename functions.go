@@ -34,6 +34,9 @@ func (f *Filter) evaluateFunctionCall(expr *FunctionCallExpr, ctx *ExecutionCont
 		if err != nil {
 			return nil, err
 		}
+		if arr, ok := arrayValue(val); ok {
+			val = arr
+		}
 		args = append(args, val)
 	}
 
@@ -50,6 +53,11 @@ func (f *Filter) evaluateFunctionCall(expr *FunctionCallExpr, ctx *ExecutionCont
 	}
 
 	if fn, ok := ctx.GetFunc(name); ok {
+		if ctx.frozen {
+			for i, arg := range args {
+				args[i] = cloneValue(arg)
+			}
+		}
 		result, err := fn(ctx.Context(), args)
 		if err != nil {
 			return nil, err
@@ -255,83 +263,42 @@ func (f *Filter) fnAny(args []Expression, ctx *ExecutionContext, depth int) (Val
 	return boolVal(result.IsTruthy()), nil
 }
 
-// all(expression) -> Bool - returns true if all elements match
+// all(expression) -> Bool - evaluates the complete predicate for every element.
 func (f *Filter) fnAll(args []Expression, ctx *ExecutionContext, depth int) (Value, error) {
 	if len(args) != 1 {
 		return boolFalse, nil
 	}
-
-	// Evaluate the inner expression
-	arg := args[0]
-
-	// If it's a binary expression with unpacked array, we need ALL semantics
-	if binExpr, ok := arg.(*BinaryExpr); ok {
-		left, err := f.evaluate(binExpr.Left, ctx, depth)
-		if err != nil {
-			return nil, err
-		}
-
-		if uv, ok := left.(UnpackedArrayValue); ok {
-			if len(uv.Array) == 0 {
-				return boolFalse, nil
-			}
-
-			right, err := f.evaluate(binExpr.Right, ctx, depth)
-			if err != nil {
-				return nil, err
-			}
-
-			// Apply operation to each element, return true only if ALL match
-			for _, elem := range uv.Array {
-				var result Value
-
-				switch binExpr.Operator {
-				case TokenEq:
-					result, err = f.evaluateEquality(elem, right)
-				case TokenNe:
-					eqResult, eqErr := f.evaluateEquality(elem, right)
-					if eqErr != nil {
-						return nil, eqErr
-					}
-					result = boolVal(!eqResult.IsTruthy())
-				case TokenContains:
-					result, err = f.evaluateContains(elem, right)
-				case TokenMatches:
-					result, err = f.evaluateMatches(elem, right)
-				case TokenIn:
-					result, err = f.evaluateIn(elem, right)
-				case TokenLt:
-					result, err = f.evaluateComparison(elem, right, func(a, b int64) bool { return a < b })
-				case TokenGt:
-					result, err = f.evaluateComparison(elem, right, func(a, b int64) bool { return a > b })
-				case TokenLe:
-					result, err = f.evaluateComparison(elem, right, func(a, b int64) bool { return a <= b })
-				case TokenGe:
-					result, err = f.evaluateComparison(elem, right, func(a, b int64) bool { return a >= b })
-				default:
-					continue
-				}
-
-				if err != nil {
-					return nil, err
-				}
-				if result == nil || !result.IsTruthy() {
-					return boolFalse, nil
-				}
-			}
-			return boolTrue, nil
-		}
-	}
-
-	// Fallback: just evaluate the expression
-	result, err := f.evaluate(arg, ctx, depth)
+	binding := &arrayBinding{}
+	predicate, err := binding.bind(args[0], depth)
 	if err != nil {
 		return nil, err
 	}
-	if result == nil {
+	if binding.array == nil {
+		result, err := f.evaluate(args[0], ctx, depth)
+		if err != nil || result == nil {
+			return boolFalse, err
+		}
+		return boolVal(result.IsTruthy()), nil
+	}
+	value, err := f.evaluate(binding.array, ctx, depth)
+	if err != nil {
+		return nil, err
+	}
+	arr, ok := arrayValue(value)
+	if !ok || len(arr) == 0 {
 		return boolFalse, nil
 	}
-	return boolVal(result.IsTruthy()), nil
+	for _, elem := range arr {
+		binding.element.Value = elem
+		result, err := f.evaluate(predicate, ctx, depth)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil || !result.IsTruthy() {
+			return boolFalse, nil
+		}
+	}
+	return boolTrue, nil
 }
 
 // concat(String...) -> String

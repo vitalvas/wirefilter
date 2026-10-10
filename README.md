@@ -325,6 +325,10 @@ port in {80..100, 443, 8000..9000}
 http.status in {200..299}
 ```
 
+Ranges also work with array fields. `ports in {80..90}` matches when any port
+falls in the range; `ports contains {80..82}` requires all three integers.
+Range checks do not expand the range into an array.
+
 ### Time and Duration Literals
 
 Timestamps use RFC 3339 format, durations use compound `d/h/m/s` notation:
@@ -1154,6 +1158,10 @@ Wildcard patterns support:
 | `%` | Modulo (nil on zero) | `x % 2` |
 
 Arithmetic works on Int, Float, Time, and Duration types. Mixed Int/Float produces Float results.
+
+Numeric operands do not require spaces: `4-2`, `x/2`, and `ttl-30m` are valid.
+Hyphens and slashes followed by letters remain part of field names, so use spaces
+for subtraction or division between named fields, such as `x - y` or `x / y`.
 Standard precedence: `*`, `/`, `%` bind tighter than `+`, `-`.
 
 Temporal arithmetic rules:
@@ -1307,6 +1315,11 @@ ip.src in cidr(ip.dst, 24)
 // Check if field exists
 exists(http.referer)
 ```
+
+`all()` evaluates the complete condition for each element, including logical
+operators, function calls, and wildcards. Unpack expressions within one condition
+must refer to the same array. Use separate or nested quantifiers for independent
+arrays. Missing and empty arrays return false.
 
 ## Advanced Examples
 
@@ -1723,6 +1736,11 @@ for _, filter := range filters {
 
 Snapshots share the cache settings from the source context but maintain
 independent cache state. Set* methods on a snapshot are silent no-ops.
+
+Mutable built-in values (including nested maps, arrays, bytes, IPs, and CIDRs)
+are copied into the snapshot. Snapshot getters return defensive copies, and
+user-defined functions receive copies of mutable arguments. Custom `Value`
+implementations must be immutable.
 
 Use `Frozen()` to check if a context is a snapshot:
 

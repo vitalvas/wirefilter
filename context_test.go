@@ -2,7 +2,10 @@ package wirefilter
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1645,4 +1648,123 @@ func TestSnapshot(t *testing.T) {
 		assert.NoError(t, err)
 		assert.True(t, result)
 	})
+}
+
+func TestIPListPromotionMembership(t *testing.T) {
+	for _, size := range []int{15, 16, 17} {
+		for _, family := range []string{"IPv4", "IPv6"} {
+			t.Run(fmt.Sprintf("%s/%d", family, size), func(t *testing.T) {
+				ips := make([]string, size, size+1)
+				for i := range ips {
+					if family == "IPv4" {
+						ips[i] = fmt.Sprintf("192.0.2.%d", i+1)
+					} else {
+						ips[i] = fmt.Sprintf("2001:db8::%x", i+1)
+					}
+				}
+				ctx := NewExecutionContext().SetIPList("blocked", ips)
+				for _, ip := range []string{ips[0], ips[size-1]} {
+					ctx.SetIPField("ip", ip)
+					requireMatch(t, `ip in $blocked`, ctx, true)
+				}
+				ctx.SetIPField("ip", "203.0.113.1")
+				requireMatch(t, `ip in $blocked`, ctx, false)
+				if family == "IPv4" {
+					ctx.SetIPField("ip", "::ffff:192.0.2.1")
+					requireMatch(t, `ip in $blocked`, ctx, true)
+				}
+				ctx.SetIPList("blocked", append(ips, "10.0.0.0/8")).SetIPField("ip", "10.1.2.3")
+				requireMatch(t, `ip in $blocked`, ctx, true)
+				ctx.SetIPField("ip", ips[0])
+				requireMatch(t, `ip in $blocked`, ctx.Snapshot(), true)
+			})
+		}
+	}
+}
+
+func TestFunctionCacheDelimiterCollisions(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		ctx := NewExecutionContext().EnableCache()
+		expressions := []string{`concat("a:string=b", "c") == "a:string=bc"`, `concat("a", "b:string=c") == "ab:string=c"`}
+		if reverse {
+			expressions[0], expressions[1] = expressions[1], expressions[0]
+		}
+		for _, expr := range expressions {
+			requireMatch(t, expr, ctx, true)
+		}
+		require.Equal(t, 2, ctx.CacheLen())
+	}
+	for _, pair := range [][2][]Value{
+		{{ArrayValue{StringValue("a, string=b")}}, {ArrayValue{StringValue("a"), StringValue("b")}}},
+		{{MapValue{"x": StringValue("a, y:string=b")}}, {MapValue{"x": StringValue("a"), "y": StringValue("b")}}},
+		{{MapValue{"x:string=a, y": StringValue("b")}}, {MapValue{"x": StringValue("a"), "y": StringValue("b")}}},
+		{{StringValue("nil")}, {nil}},
+		{nil, {StringValue(":nil")}},
+		{{DurationValue(math.MinInt64)}, {DurationValue(math.MinInt64 + 1)}},
+		{{ArrayValue{IntValue(1)}}, {NewSetValue(ArrayValue{StringValue("1")})}},
+	} {
+		require.NotEqual(t, cacheKey("fn", pair[0]), cacheKey("fn", pair[1]))
+	}
+}
+
+func TestSnapshotDeepIsolation(t *testing.T) {
+	_, network, err := net.ParseCIDR("192.0.2.0/24")
+	require.NoError(t, err)
+	data := BytesValue("original")
+	ip := net.ParseIP("192.0.2.1")
+	nested := MapValue{"data": data, "array": ArrayValue{StringValue("original")}, "ip": IPValue{IP: ip}, "network": CIDRValue{IPNet: network}}
+	table := MapValue{"key": nested}
+	ctx := NewExecutionContext().SetField("nested", nested).SetTableValues("table", table).
+		SetBytesField("empty", []byte{}).SetBytesField("nil", nil).
+		SetList("roles", strings.Fields(strings.Repeat("admin ", 16)))
+	snap := ctx.Snapshot()
+	empty, _ := snap.GetField("empty")
+	require.Equal(t, BytesValue{}, empty)
+	nilBytes, _ := snap.GetField("nil")
+	require.Equal(t, BytesValue(nil), nilBytes)
+	data[0] = 'X'
+	ip[len(ip)-1] = 2
+	network.Mask[0] = 0
+	nested["array"].(ArrayValue)[0] = StringValue("changed")
+	table["key"] = nil
+	list, _ := ctx.GetList("roles")
+	list[0] = StringValue("changed")
+	for _, expr := range []string{
+		`nested["data"] contains "original"`, `nested["array"][0] == "original"`,
+		`nested["ip"] == 192.0.2.1`, `nested["network"] == 192.0.2.0/24`,
+		`$table["key"]["data"] contains "original"`, `$roles[0] == "admin"`,
+	} {
+		requireMatch(t, expr, snap, true)
+	}
+	value, _ := snap.GetField("nested")
+	value.(MapValue)["data"].(BytesValue)[0] = 'Y'
+	readTable, _ := snap.GetTable("table")
+	readTable["key"] = nil
+	readList, _ := snap.GetList("roles")
+	readList[0] = StringValue("changed")
+	requireMatch(t, `nested["data"] contains "original" and $roles[0] == "admin" and $table["key"]`, snap, true)
+
+	filter, err := Compile(`nested["array"][0] == "original"`, nil)
+	require.NoError(t, err)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 100 {
+			nested["array"] = ArrayValue{StringValue("changed")}
+		}
+	})
+	wg.Go(func() {
+		for range 100 {
+			got, err := filter.Execute(snap)
+			assert.NoError(t, err)
+			assert.True(t, got)
+		}
+	})
+	wg.Wait()
+	ctx.SetFunc("mutate", func(_ context.Context, args []Value) (Value, error) {
+		args[0].(MapValue)["data"].(BytesValue)[0] = 'Y'
+		return BoolValue(true), nil
+	})
+	snap = ctx.Snapshot()
+	requireMatch(t, `mutate(nested)`, snap, true)
+	requireMatch(t, `nested["data"] contains "Xriginal"`, snap, true)
 }

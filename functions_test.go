@@ -1681,8 +1681,7 @@ func TestFilterFunctions(t *testing.T) {
 		assert.False(t, result2)
 	})
 
-	t.Run("all with unsupported operator fallback", func(t *testing.T) {
-		// wildcard operator inside all() hits the default case
+	t.Run("all with wildcard", func(t *testing.T) {
 		filter, err := Compile(`all(tags[*] wildcard "*.com")`, nil)
 		assert.NoError(t, err)
 		ctx := NewExecutionContext().SetArrayField("tags", []string{"a.com", "b.com"})

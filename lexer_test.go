@@ -1,10 +1,14 @@
 package wirefilter
 
 import (
+	"fmt"
+	"net"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkLexer(b *testing.B) {
@@ -139,7 +143,7 @@ func TestLexer(t *testing.T) {
 	})
 
 	t.Run("literals", func(t *testing.T) {
-		input := `"test string" 42 -10 true false`
+		input := `"test string" 42, -10 true false`
 		lexer := NewLexer(input)
 
 		tok := lexer.NextToken()
@@ -149,6 +153,7 @@ func TestLexer(t *testing.T) {
 		tok = lexer.NextToken()
 		assert.Equal(t, TokenInt, tok.Type)
 		assert.Equal(t, int64(42), tok.Value)
+		assert.Equal(t, TokenComma, lexer.NextToken().Type)
 
 		tok = lexer.NextToken()
 		assert.Equal(t, TokenInt, tok.Type)
@@ -995,4 +1000,48 @@ func TestLexerTimestampAndDuration(t *testing.T) {
 		assert.Equal(t, TokenDuration, tok.Type)
 		assert.Equal(t, -30*time.Minute, tok.Value.(time.Duration))
 	})
+}
+
+func TestIPv6LiteralForms(t *testing.T) {
+	for _, ip := range []string{"2a00:1450::1", "::1", "::", "1db8::1", "::ffff:192.0.2.1", "fe80::1", "2001:db8::1"} {
+		t.Run(ip, func(t *testing.T) {
+			requireMatch(t, fmt.Sprintf("ip == %s", ip), NewExecutionContext().SetIPField("ip", ip), true)
+		})
+	}
+	for _, cidr := range []string{"2a00::/16", "::/0", "1db8::/32", "::ffff:192.0.2.0/120"} {
+		_, network, err := net.ParseCIDR(cidr)
+		require.NoError(t, err)
+		requireMatch(t, fmt.Sprintf("ip in %s", cidr), NewExecutionContext().SetIPField("ip", network.IP.String()), true)
+	}
+}
+
+func TestArithmeticTokenBoundaries(t *testing.T) {
+	ctx := NewExecutionContext().SetIntField("x", 4).SetDurationField("ttl", time.Hour)
+	for _, expr := range []string{
+		`4-2 == 2`, `4 -2 == 2`, `4/2 == 2`, `x/2 == 2`, `x-2 == 2`,
+		`1.5/0.5 == 3.0`, `2000-1000 == 1000`, `1--2 == 3`,
+		`ttl-30m == 30m`, `-30m+1h == 30m`,
+		`2026-01-01T00:00:00Z+1h == 2026-01-01T01:00:00Z`,
+		`2026-01-01T00:00:00+00:00-1h == 2025-12-31T23:00:00Z`,
+	} {
+		requireMatch(t, expr, ctx, true)
+	}
+}
+
+func TestCompileRejectsEmbeddedNUL(t *testing.T) {
+	for _, expr := range []string{"true\x00 and false", "\x00true", "true\x00", "x == \"a\x00b\"", "x == r\"a\x00b\"", "x == \"a\\\x00b\""} {
+		_, err := Compile(expr, nil)
+		require.Error(t, err, strconv.Quote(expr))
+	}
+}
+
+func TestDurationLiteralOverflow(t *testing.T) {
+	for _, duration := range []string{"3000000h", "-3000000h", "9223372036854775807s", "100000000000000000000000000000000000000h", "1h999999999999999999999999999999m", "2500000h2500000h", "106751d23h47m17s"} {
+		_, err := Compile(fmt.Sprintf("%s < 0s", duration), nil)
+		require.ErrorContains(t, err, "duration overflow", duration)
+	}
+	for _, duration := range []string{"106751d23h47m16s", "-106751d23h47m16s", "0d0h0m0s", "1d2h3m4s"} {
+		_, err := Compile(fmt.Sprintf("%s == %s", duration, duration), nil)
+		require.NoError(t, err, duration)
+	}
 }

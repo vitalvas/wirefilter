@@ -2,6 +2,7 @@ package wirefilter
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -10,14 +11,16 @@ import (
 
 // Lexer tokenizes filter expression strings into tokens.
 type Lexer struct {
-	input string
-	pos   int
-	ch    byte
+	input      string
+	pos        int
+	ch         byte
+	previous   TokenType
+	invalidNUL bool
 }
 
 // NewLexer creates a new lexer for the given input string.
 func NewLexer(input string) *Lexer {
-	l := &Lexer{input: input}
+	l := &Lexer{input: input, invalidNUL: strings.IndexByte(input, 0) >= 0}
 	l.readChar()
 	return l
 }
@@ -104,7 +107,20 @@ func (l *Lexer) readOperatorToken() (Token, bool) {
 
 // NextToken returns the next token from the input.
 func (l *Lexer) NextToken() Token {
+	tok := l.nextToken()
+	l.previous = tok.Type
+	return tok
+}
+
+func (l *Lexer) nextToken() Token {
+	if l.invalidNUL {
+		l.invalidNUL = false
+		return Token{Type: TokenError, Value: "unexpected NUL byte"}
+	}
 	l.skipWhitespace()
+	if tok, ok := l.readIPToken(); ok {
+		return tok
+	}
 
 	if tok, ok := l.readOperatorToken(); ok {
 		l.readChar()
@@ -115,7 +131,11 @@ func (l *Lexer) NextToken() Token {
 
 	switch l.ch {
 	case 0:
-		tok = Token{Type: TokenEOF}
+		if l.pos <= len(l.input) {
+			tok = Token{Type: TokenError, Value: "unexpected NUL byte"}
+		} else {
+			tok = Token{Type: TokenEOF}
+		}
 	case '~':
 		tok = Token{Type: TokenMatches, Literal: "~"}
 	case '(':
@@ -154,7 +174,7 @@ func (l *Lexer) NextToken() Token {
 		switch {
 		case isLetter(l.ch):
 			return l.readIdentifierToken()
-		case isDigit(l.ch) || (l.ch == '-' && isDigit(l.peekChar())):
+		case isDigit(l.ch) || (l.ch == '-' && isDigit(l.peekChar()) && !tokenEndsOperand(l.previous)):
 			return l.readNumberToken()
 		case l.ch == '-':
 			tok = Token{Type: TokenMinus, Literal: "-"}
@@ -237,6 +257,9 @@ func (l *Lexer) readString() (string, any) {
 func (l *Lexer) readIdentifier() string {
 	start := l.pos - 1
 	for isLetter(l.ch) || isDigit(l.ch) || l.ch == '.' || l.ch == '_' || l.ch == '-' || l.ch == ':' || l.ch == '/' {
+		if (l.ch == '/' || l.ch == '-') && isDigit(l.peekChar()) {
+			break // A numeric right operand makes this an arithmetic operator.
+		}
 		l.readChar()
 	}
 	return l.input[start : l.pos-1]
@@ -437,6 +460,9 @@ func (l *Lexer) readTimestampToken(start int) Token {
 	// Stop at '..' (range operator)
 	for isTimestampChar(l.ch) && (l.ch != '.' || l.peekChar() != '.') {
 		l.readChar()
+		if _, err := time.Parse(time.RFC3339Nano, l.input[start:l.pos-1]); err == nil {
+			break
+		}
 	}
 	literal := l.input[start : l.pos-1]
 
@@ -462,9 +488,12 @@ func (l *Lexer) readDurationToken(start int, digitsPart string) Token {
 	var total time.Duration
 
 	// Process the first group: digitsPart + current suffix
-	num, _ := strconv.ParseInt(digitsPart, 10, 64)
+	num, err := strconv.ParseInt(digitsPart, 10, 64)
 	suffix := l.ch
-	total += durationFromUnit(num, suffix)
+	if err != nil || num > math.MaxInt64/int64(durationFromUnit(1, suffix)) {
+		return Token{Type: TokenError, Value: "duration overflow"}
+	}
+	total = durationFromUnit(num, suffix)
 	l.readChar()
 
 	// Greedily read more [0-9]+[dhms] groups
@@ -483,7 +512,11 @@ func (l *Lexer) readDurationToken(start int, digitsPart string) Token {
 				Value:   fmt.Sprintf("invalid duration: %s", literal),
 			}
 		}
-		n, _ := strconv.ParseInt(numStr, 10, 64)
+		n, err := strconv.ParseInt(numStr, 10, 64)
+		unit := durationFromUnit(1, l.ch)
+		if err != nil || n > (math.MaxInt64-int64(total))/int64(unit) {
+			return Token{Type: TokenError, Value: "duration overflow"}
+		}
 		total += durationFromUnit(n, l.ch)
 		l.readChar()
 	}
@@ -527,7 +560,7 @@ func (l *Lexer) readNumberToken() Token {
 	digitsPart := l.input[digitsStart : l.pos-1]
 
 	// Check for RFC 3339 timestamp: exactly 4 digits followed by '-'
-	if !isNegative && len(digitsPart) == 4 && l.ch == '-' {
+	if !isNegative && len(digitsPart) == 4 && l.ch == '-' && looksLikeTimestamp(l.input[start:]) {
 		l.readChar()
 		return l.readTimestampToken(start)
 	}
@@ -551,12 +584,14 @@ func (l *Lexer) readNumberToken() Token {
 // readIPCIDRChars consumes characters that could form IP, CIDR, or numeric literals.
 func (l *Lexer) readIPCIDRChars() {
 	hasColon := false
+	dots := 0
 	for {
 		if isDigit(l.ch) {
 			l.readChar()
 			continue
 		}
 		if l.ch == '.' && l.peekChar() != '.' {
+			dots++
 			l.readChar()
 			continue
 		}
@@ -565,7 +600,7 @@ func (l *Lexer) readIPCIDRChars() {
 			l.readChar()
 			continue
 		}
-		if l.ch == '/' {
+		if l.ch == '/' && (dots >= 3 || hasColon) {
 			l.readChar()
 			continue
 		}
@@ -575,6 +610,55 @@ func (l *Lexer) readIPCIDRChars() {
 		}
 		break
 	}
+}
+
+func tokenEndsOperand(t TokenType) bool {
+	switch t {
+	case TokenIdent, TokenString, TokenRawString, TokenInt, TokenFloat, TokenBool,
+		TokenIP, TokenCIDR, TokenTime, TokenDuration, TokenRParen, TokenRBracket, TokenRBrace, TokenListRef:
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeTimestamp(s string) bool {
+	return len(s) >= 11 && s[4] == '-' && s[7] == '-' && (s[10] == 'T' || s[10] == 't')
+}
+
+// Recognize complete IP literals before numeric/duration or identifier scanning,
+// including IPv6 addresses beginning with :: or a mixed hexadecimal group.
+func (l *Lexer) readIPToken() (Token, bool) {
+	start := l.pos - 1
+	end := start
+	for end < len(l.input) {
+		ch := l.input[end]
+		if !isDigit(ch) && !isHexChar(ch) && ch != ':' && ch != '.' && ch != '/' {
+			break
+		}
+		if ch == '.' && end+1 < len(l.input) && l.input[end+1] == '.' {
+			break
+		}
+		end++
+	}
+	if end <= start {
+		return Token{}, false
+	}
+	literal := l.input[start:end]
+	if !strings.Contains(literal, ":") && strings.Count(literal, ".") != 3 {
+		return Token{}, false
+	}
+	var tok Token
+	if _, network, err := net.ParseCIDR(literal); err == nil {
+		tok = Token{Type: TokenCIDR, Literal: literal, Value: network}
+	} else if ip := NormalizeIP(net.ParseIP(literal)); ip != nil {
+		tok = Token{Type: TokenIP, Literal: literal, Value: ip}
+	} else {
+		return Token{}, false
+	}
+	l.pos = end
+	l.readChar()
+	return tok, true
 }
 
 // classifyNumericLiteral attempts to parse a literal as CIDR, IP, float, or integer.

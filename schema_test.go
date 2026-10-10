@@ -1,9 +1,11 @@
 package wirefilter
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSchemaFunctionControl(t *testing.T) {
@@ -973,4 +975,23 @@ func TestDisableRegex(t *testing.T) {
 		_, err = Compile(`regex_replace(name, "a", "b") == "x"`, noFlag)
 		assert.NoError(t, err)
 	})
+}
+
+func TestUDFArgumentTypesForLiterals(t *testing.T) {
+	schema := NewSchema().AddArrayField("ports", TypeInt).AddMapField("names", TypeString).
+		RegisterFunction("echo", TypeString, []Type{TypeString}).
+		RegisterFunction("number", TypeInt, []Type{TypeInt}).
+		RegisterFunction("duration", TypeDuration, []Type{TypeDuration})
+	for _, arg := range []string{`123`, `1.5`, `true`, `1h`, `192.0.2.1`, `192.0.2.0/24`, `2026-01-01T00:00:00Z`, `1+2`, `1 == 1`, `ports[0]`} {
+		_, err := Compile(fmt.Sprintf("echo(%s)", arg), schema)
+		require.ErrorContains(t, err, "expected string")
+	}
+	for _, arg := range []string{`"hello"`, `r"hello"`, `names["user"]`} {
+		_, err := Compile(fmt.Sprintf("echo(%s)", arg), schema)
+		require.NoError(t, err)
+	}
+	for _, expr := range []string{`number(ports[0])`, `number(1+2)`, `number(2h/1h)`, `duration(1h+30m)`, `duration(2*1h)`, `duration(1h/2)`} {
+		_, err := Compile(expr, schema)
+		require.NoError(t, err)
+	}
 }

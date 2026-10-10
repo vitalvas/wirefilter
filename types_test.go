@@ -2,12 +2,14 @@ package wirefilter
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkValueOperations(b *testing.B) {
@@ -942,4 +944,18 @@ func TestSetValueInFilter(t *testing.T) {
 		assert.NoError(t, err)
 		assert.True(t, result)
 	})
+}
+
+func TestSetMembershipPreservesScalarEquality(t *testing.T) {
+	arr := ArrayValue{FloatValue(math.Copysign(0, -1)), FloatValue(math.NaN()),
+		DurationValue(math.MinInt64), StringValue("a, string=b"),
+		ArrayValue{StringValue("a"), StringValue("b")},
+		NewIntInterval(80, 90)}
+	set := NewSetValue(arr)
+	for _, value := range []Value{FloatValue(0), FloatValue(math.NaN()),
+		DurationValue(math.MinInt64), DurationValue(math.MinInt64 + 1),
+		StringValue("a, string=b"), ArrayValue{StringValue("a"), StringValue("b")},
+		ArrayValue{StringValue("a, b")}, IntValue(85), IntValue(91), nil} {
+		require.Equal(t, arr.Contains(value), set.Contains(value))
+	}
 }

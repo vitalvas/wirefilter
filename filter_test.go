@@ -1783,3 +1783,12 @@ func TestEvalDepthLimit(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "maximum evaluation depth")
 }
+
+func requireMatch(t *testing.T, expression string, ctx *ExecutionContext, want bool) {
+	t.Helper()
+	filter, err := Compile(expression, nil)
+	require.NoError(t, err)
+	got, err := filter.Execute(ctx)
+	require.NoError(t, err)
+	require.Equal(t, want, got, expression)
+}

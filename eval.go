@@ -1,6 +1,7 @@
 package wirefilter
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"net"
@@ -82,7 +83,7 @@ func (f *Filter) evaluateRangeExpr(expr *RangeExpr, ctx *ExecutionContext, depth
 }
 
 func (f *Filter) evaluateFieldExpr(expr *FieldExpr, ctx *ExecutionContext) (Value, error) {
-	val, ok := ctx.GetField(expr.Name)
+	val, ok := ctx.getField(expr.Name)
 	if !ok {
 		return nil, nil
 	}
@@ -122,8 +123,7 @@ func (f *Filter) evaluateIndexExpr(expr *IndexExpr, ctx *ExecutionContext, depth
 	}
 
 	// Array access with integer index
-	if object.Type() == TypeArray && index.Type() == TypeInt {
-		arr := object.(ArrayValue)
+	if arr, ok := arrayValue(object); ok && index.Type() == TypeInt {
 		idx := int(index.(IntValue))
 		if idx < 0 || idx >= len(arr) {
 			return nil, nil // Out of bounds
@@ -143,21 +143,22 @@ func (f *Filter) evaluateUnpackExpr(expr *UnpackExpr, ctx *ExecutionContext, dep
 		return nil, nil
 	}
 
-	if arr.Type() != TypeArray {
+	values, ok := arrayValue(arr)
+	if !ok {
 		return nil, nil
 	}
 
-	return UnpackedArrayValue{Array: arr.(ArrayValue)}, nil
+	return UnpackedArrayValue{Array: values}, nil
 }
 
 func (f *Filter) evaluateListRefExpr(expr *ListRefExpr, ctx *ExecutionContext) (Value, error) {
 	if set, ok := ctx.getSet(expr.Name); ok {
 		return set, nil
 	}
-	if list, ok := ctx.GetList(expr.Name); ok {
+	if list, ok := ctx.getList(expr.Name); ok {
 		return list, nil
 	}
-	if table, ok := ctx.GetTable(expr.Name); ok {
+	if table, ok := ctx.getTable(expr.Name); ok {
 		return table, nil
 	}
 	return nil, nil
@@ -397,7 +398,7 @@ func (f *Filter) evaluateComparison(left, right Value, cmp func(int64, int64) bo
 
 	// Time vs time comparison
 	if left.Type() == TypeTime && right.Type() == TypeTime {
-		return boolVal(cmp(int64(left.(TimeValue))-int64(right.(TimeValue)), 0)), nil
+		return boolVal(cmp(int64(left.(TimeValue)), int64(right.(TimeValue)))), nil
 	}
 
 	// Duration vs duration comparison
@@ -638,11 +639,17 @@ func (f *Filter) evaluateContains(left, right Value) (Value, error) {
 	if left.Type() == TypeString && right.Type() == TypeString {
 		return boolVal(strings.Contains(string(left.(StringValue)), string(right.(StringValue)))), nil
 	}
-	if left.Type() == TypeArray {
-		leftArr := left.(ArrayValue)
+	if data, ok := left.(BytesValue); ok {
+		switch needle := right.(type) {
+		case BytesValue:
+			return boolVal(bytes.Contains(data, needle)), nil
+		case StringValue:
+			return boolVal(bytes.Contains(data, []byte(needle))), nil
+		}
+	}
+	if leftArr, ok := arrayValue(left); ok {
 		// Array contains Array: AND logic - all elements from right exist in left
-		if right.Type() == TypeArray {
-			rightArr := right.(ArrayValue)
+		if rightArr, ok := arrayValue(right); ok {
 			if len(rightArr) == 0 {
 				return boolTrue, nil
 			}
@@ -699,6 +706,23 @@ func (f *Filter) evaluateIn(left, right Value) (Value, error) {
 	if left == nil || right == nil {
 		return boolFalse, nil
 	}
+	// Array membership applies the scalar membership rules to each element.
+	if leftArr, ok := arrayValue(left); ok {
+		for _, elem := range leftArr {
+			result, err := f.evaluateScalarIn(elem, right)
+			if err != nil || result.IsTruthy() {
+				return result, err
+			}
+		}
+		return boolFalse, nil
+	}
+	return f.evaluateScalarIn(left, right)
+}
+
+func (f *Filter) evaluateScalarIn(left, right Value) (Value, error) {
+	if left == nil || right == nil {
+		return boolFalse, nil
+	}
 
 	// Handle SetValue for O(1) membership
 	if sv, ok := right.(SetValue); ok {
@@ -717,9 +741,7 @@ func (f *Filter) evaluateIn(left, right Value) (Value, error) {
 		return boolVal(iv.Contains(left)), nil
 	}
 
-	if right.Type() == TypeArray {
-		rightArr := right.(ArrayValue)
-
+	if rightArr, ok := arrayValue(right); ok {
 		// IP in Array: check if IP matches any element (IP equality or CIDR containment)
 		if left.Type() == TypeIP {
 			ipVal := left.(IPValue)
@@ -739,26 +761,6 @@ func (f *Filter) evaluateIn(left, right Value) (Value, error) {
 				}
 			}
 			return boolFalse, nil
-		}
-
-		// Array in Array: OR logic - any element from left exists in right
-		if left.Type() == TypeArray {
-			leftArr := left.(ArrayValue)
-			for _, leftElem := range leftArr {
-				if rightArr.Contains(leftElem) {
-					return boolTrue, nil
-				}
-			}
-			return boolFalse, nil
-		}
-		// Single value in Array (check for IntervalValue elements)
-		for _, elem := range rightArr {
-			if iv, ok := elem.(IntervalValue); ok {
-				if iv.Contains(left) {
-					return boolTrue, nil
-				}
-				continue
-			}
 		}
 		return boolVal(rightArr.Contains(left)), nil
 	}
@@ -802,11 +804,11 @@ func (f *Filter) evaluateAllEqual(left, right Value) (Value, error) {
 	if left == nil || right == nil {
 		return boolFalse, nil
 	}
-	if left.Type() != TypeArray {
+	arr, ok := arrayValue(left)
+	if !ok {
 		return boolFalse, nil
 	}
 
-	arr := left.(ArrayValue)
 	if len(arr) == 0 {
 		return boolFalse, nil
 	}
@@ -828,11 +830,11 @@ func (f *Filter) evaluateAnyNotEqual(left, right Value) (Value, error) {
 	if left == nil || right == nil {
 		return boolFalse, nil
 	}
-	if left.Type() != TypeArray {
+	arr, ok := arrayValue(left)
+	if !ok {
 		return boolFalse, nil
 	}
 
-	arr := left.(ArrayValue)
 	if len(arr) == 0 {
 		return boolFalse, nil
 	}

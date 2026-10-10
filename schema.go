@@ -436,7 +436,7 @@ func (v *validator) validateFuncArgs(expr *FunctionCallExpr) error {
 		return fmt.Errorf("function %s expects %d arguments, got %d", expr.Name, len(sig.ArgTypes), len(expr.Arguments))
 	}
 	for i, argExpr := range expr.Arguments {
-		if argType, ok := v.resolveFieldType(argExpr); ok {
+		if argType, ok := v.resolveValueType(argExpr); ok {
 			if argType != sig.ArgTypes[i] {
 				return fmt.Errorf("function %s argument %d: expected %s, got %s", expr.Name, i+1, sig.ArgTypes[i], argType)
 			}
@@ -514,7 +514,7 @@ func (v *validator) resolveFieldType(expr Expression) (Type, bool) {
 	case *IndexExpr:
 		if fieldExpr, ok := e.Object.(*FieldExpr); ok {
 			if field, ok := v.schema.GetField(fieldExpr.Name); ok {
-				if field.Type == TypeMap && field.ElemTyped {
+				if (field.Type == TypeMap || field.Type == TypeArray) && field.ElemTyped {
 					return field.ElemType, true
 				}
 			}
@@ -527,6 +527,79 @@ func (v *validator) resolveFieldType(expr Expression) (Type, bool) {
 			if sig, ok := v.schema.customFuncs[strings.ToLower(e.Name)]; ok {
 				return sig.ReturnType, true
 			}
+		}
+	}
+	return 0, false
+}
+
+// resolveValueType also accounts for literal and computed function arguments.
+func (v *validator) resolveValueType(expr Expression) (Type, bool) {
+	switch e := expr.(type) {
+	case *LiteralExpr:
+		if e.Value != nil {
+			return e.Value.Type(), true
+		}
+	case *ArrayExpr:
+		return TypeArray, true
+	case *UnaryExpr:
+		if e.Operator == TokenNot {
+			return TypeBool, true
+		}
+	case *BinaryExpr:
+		switch e.Operator {
+		case TokenAnd, TokenOr, TokenXor, TokenEq, TokenNe, TokenAllEq, TokenAnyNe,
+			TokenLt, TokenGt, TokenLe, TokenGe, TokenIn, TokenContains, TokenMatches,
+			TokenWildcard, TokenStrictWildcard:
+			return TypeBool, true
+		}
+		lt, lok := v.resolveValueType(e.Left)
+		rt, rok := v.resolveValueType(e.Right)
+		if !lok || !rok {
+			return 0, false
+		}
+		return arithmeticResultType(lt, rt, e.Operator)
+	}
+	return v.resolveFieldType(expr)
+}
+
+func arithmeticResultType(left, right Type, op TokenType) (Type, bool) {
+	switch left {
+	case TypeTime:
+		if right == TypeTime && op == TokenMinus {
+			return TypeDuration, true
+		}
+		if right == TypeDuration && (op == TokenPlus || op == TokenMinus) {
+			return TypeTime, true
+		}
+	case TypeDuration:
+		switch right {
+		case TypeTime:
+			if op == TokenPlus {
+				return TypeTime, true
+			}
+		case TypeDuration:
+			switch op {
+			case TokenDiv:
+				return TypeInt, true
+			case TokenPlus, TokenMinus, TokenMod:
+				return TypeDuration, true
+			}
+		case TypeInt, TypeFloat:
+			if op == TokenAsterisk || op == TokenDiv {
+				return TypeDuration, true
+			}
+		}
+	case TypeInt, TypeFloat:
+		switch right {
+		case TypeDuration:
+			if op == TokenAsterisk {
+				return TypeDuration, true
+			}
+		case TypeInt, TypeFloat:
+			if left == TypeFloat || right == TypeFloat {
+				return TypeFloat, true
+			}
+			return TypeInt, true
 		}
 	}
 	return 0, false

@@ -85,10 +85,8 @@ func (i IntValue) Type() Type     { return TypeInt }
 func (i IntValue) String() string { return fmt.Sprintf("%d", i) }
 func (i IntValue) IsTruthy() bool { return true }
 func (i IntValue) Equal(v Value) bool {
-	if v.Type() != TypeInt {
-		return false
-	}
-	return int64(i) == int64(v.(IntValue))
+	other, ok := v.(IntValue)
+	return ok && i == other
 }
 
 // FloatValue represents a floating-point value.
@@ -192,10 +190,10 @@ func (a ArrayValue) String() string {
 	return fmt.Sprintf("[%s]", strings.Join(parts, ", "))
 }
 func (a ArrayValue) Equal(v Value) bool {
-	if v == nil || v.Type() != TypeArray {
+	other, ok := arrayValue(v)
+	if !ok {
 		return false
 	}
-	other := v.(ArrayValue)
 	if len(a) != len(other) {
 		return false
 	}
@@ -215,6 +213,9 @@ func (a ArrayValue) Equal(v Value) bool {
 
 // Contains checks if the array contains the specified value.
 func (a ArrayValue) Contains(v Value) bool {
+	if iv, ok := v.(IntervalValue); ok {
+		return a.containsInterval(iv)
+	}
 	for _, item := range a {
 		if item == nil {
 			if v == nil {
@@ -225,6 +226,12 @@ func (a ArrayValue) Contains(v Value) bool {
 		if v == nil {
 			continue // item is non-nil, v is nil - no match
 		}
+		if iv, ok := item.(IntervalValue); ok {
+			if iv.Contains(v) {
+				return true
+			}
+			continue
+		}
 		if item.Equal(v) {
 			return true
 		}
@@ -232,39 +239,108 @@ func (a ArrayValue) Contains(v Value) bool {
 	return false
 }
 
+// arrayValue exposes the elements of every built-in array representation.
+func arrayValue(v Value) (ArrayValue, bool) {
+	switch a := v.(type) {
+	case ArrayValue:
+		return a, true
+	case SetValue:
+		return a.Array, true
+	case UnpackedArrayValue:
+		return a.Array, true
+	default:
+		return nil, false
+	}
+}
+
+// containsInterval checks coverage without expanding potentially enormous ranges.
+func (a ArrayValue) containsInterval(iv IntervalValue) bool {
+	if iv.start > iv.end {
+		return true // An empty range requires no elements.
+	}
+	spans := make([]IntervalValue, 0, len(a))
+	for _, v := range a {
+		if span, ok := v.(IntervalValue); ok {
+			if span.elemType == iv.elemType && span.start <= span.end {
+				spans = append(spans, span)
+			}
+		} else if n, ok := intervalScalar(v, iv.elemType); ok {
+			spans = append(spans, IntervalValue{start: n, end: n, elemType: iv.elemType})
+		}
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+	next := iv.start
+	for _, span := range spans {
+		if span.start > next {
+			return false
+		}
+		if span.end >= iv.end {
+			return true
+		}
+		if span.end >= next {
+			next = span.end + 1 // span.end < iv.end, so this cannot overflow.
+		}
+	}
+	return false
+}
+
+func intervalScalar(v Value, t Type) (int64, bool) {
+	switch n := v.(type) {
+	case IntValue:
+		return int64(n), t == TypeInt
+	case TimeValue:
+		return int64(n), t == TypeTime
+	case DurationValue:
+		return int64(n), t == TypeDuration
+	default:
+		return 0, false
+	}
+}
+
 // setAutoPromoteThreshold is the minimum array size for automatic promotion to SetValue.
 const setAutoPromoteThreshold = 16
 
 // SetValue wraps an ArrayValue with a hash map for O(1) membership tests.
 // It implements the Value interface with TypeArray for compatibility.
-// IP and CIDR values require linear scan and are not indexed in the hash map.
+// Exact IP matches are indexed; CIDR containment requires a linear scan.
 type SetValue struct {
-	Array  ArrayValue
-	index  map[string]struct{}
-	hasNet bool // true if array contains IP or CIDR values (require linear scan)
+	Array        ArrayValue
+	index        map[string]struct{}
+	hasNet       bool // CIDR containment requires a linear scan
+	hasIntervals bool // ranges require containment checks rather than exact lookup
 }
 
 // NewSetValue creates a SetValue from an ArrayValue.
 // String, Int, Float, Bool, Time, Duration values are indexed for O(1) lookup.
-// IP and CIDR values are kept in the array for linear containment checks.
+// Exact IP matches are indexed. CIDRs and composite values use linear checks.
 func NewSetValue(arr ArrayValue) SetValue {
 	idx := make(map[string]struct{}, len(arr))
 	var hasNet bool
+	var hasIntervals bool
 	for _, v := range arr {
 		if v == nil {
 			continue
 		}
-		switch v.Type() {
-		case TypeIP, TypeCIDR:
+		switch v.(type) {
+		case CIDRValue:
 			hasNet = true
-		default:
+		case IntervalValue:
+			hasIntervals = true
+		case StringValue, IntValue, FloatValue, BoolValue, TimeValue, DurationValue, BytesValue, IPValue:
 			idx[setKey(v)] = struct{}{}
 		}
 	}
-	return SetValue{Array: arr, index: idx, hasNet: hasNet}
+	return SetValue{Array: arr, index: idx, hasNet: hasNet, hasIntervals: hasIntervals}
 }
 
-func setKey(v Value) string { return fmt.Sprintf("%s:%s", v.Type(), v.String()) }
+func setKey(v Value) string {
+	if f, ok := v.(FloatValue); ok && f == 0 {
+		return "float=0" // Signed zero compares equal in ArrayValue as well.
+	}
+	var sb strings.Builder
+	writeCacheKeyValue(&sb, v)
+	return sb.String()
+}
 
 func (s SetValue) Type() Type     { return TypeArray }
 func (s SetValue) IsTruthy() bool { return true }
@@ -282,27 +358,29 @@ func (s SetValue) Contains(v Value) bool {
 	if v == nil {
 		return s.Array.Contains(nil)
 	}
-	switch v.Type() {
-	case TypeIP:
+	switch val := v.(type) {
+	case IPValue:
 		if _, ok := s.index[setKey(v)]; ok {
 			return true
 		}
 		if s.hasNet {
-			ipVal := v.(IPValue)
 			for _, elem := range s.Array {
 				if elem != nil && elem.Type() == TypeCIDR {
-					if elem.(CIDRValue).Contains(ipVal.IP) {
+					if elem.(CIDRValue).Contains(val.IP) {
 						return true
 					}
 				}
 			}
 		}
 		return false
-	case TypeCIDR:
-		return s.Array.Contains(v)
-	default:
+	case StringValue, IntValue, FloatValue, BoolValue, TimeValue, DurationValue, BytesValue:
+		if f, ok := v.(FloatValue); ok && math.IsNaN(float64(f)) {
+			return false
+		}
 		_, ok := s.index[setKey(v)]
-		return ok
+		return ok || s.hasIntervals && s.Array.Contains(v)
+	default:
+		return s.Array.Contains(v)
 	}
 }
 
@@ -379,10 +457,8 @@ func (t TimeValue) Type() Type     { return TypeTime }
 func (t TimeValue) IsTruthy() bool { return true }
 func (t TimeValue) String() string { return t.GoTime().Format(time.RFC3339Nano) }
 func (t TimeValue) Equal(v Value) bool {
-	if v.Type() != TypeTime {
-		return false
-	}
-	return int64(t) == int64(v.(TimeValue))
+	other, ok := v.(TimeValue)
+	return ok && t == other
 }
 
 // DurationValue represents a duration of time.
@@ -391,10 +467,8 @@ type DurationValue time.Duration
 func (d DurationValue) Type() Type     { return TypeDuration }
 func (d DurationValue) IsTruthy() bool { return true }
 func (d DurationValue) Equal(v Value) bool {
-	if v.Type() != TypeDuration {
-		return false
-	}
-	return time.Duration(d) == time.Duration(v.(DurationValue))
+	other, ok := v.(DurationValue)
+	return ok && d == other
 }
 
 // String returns a human-readable duration with day support and sub-second precision.
@@ -503,27 +577,8 @@ func (iv IntervalValue) Equal(v Value) bool {
 
 // Contains checks if a value falls within the interval [start, end].
 func (iv IntervalValue) Contains(v Value) bool {
-	switch iv.elemType {
-	case TypeInt:
-		if v.Type() != TypeInt {
-			return false
-		}
-		n := int64(v.(IntValue))
-		return n >= iv.start && n <= iv.end
-	case TypeTime:
-		if v.Type() != TypeTime {
-			return false
-		}
-		n := int64(v.(TimeValue))
-		return n >= iv.start && n <= iv.end
-	case TypeDuration:
-		if v.Type() != TypeDuration {
-			return false
-		}
-		n := int64(v.(DurationValue))
-		return n >= iv.start && n <= iv.end
-	}
-	return false
+	n, ok := intervalScalar(v, iv.elemType)
+	return ok && n >= iv.start && n <= iv.end
 }
 
 // NormalizeIP returns the canonical form of an IP address per RFC 4291.
