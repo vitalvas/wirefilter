@@ -70,9 +70,10 @@ import (
 )
 
 func main() {
-    schema := wirefilter.NewSchema().
-        AddField("http.host", wirefilter.TypeString).
-        AddField("http.status", wirefilter.TypeInt)
+    schema := wirefilter.NewSchema(map[string]wirefilter.Type{
+        "http.host":   wirefilter.TypeString,
+        "http.status": wirefilter.TypeInt,
+    })
 
     filter, err := wirefilter.Compile(
         `http.host == "example.com" and http.status >= 400`, schema)
@@ -80,9 +81,10 @@ func main() {
         log.Fatal(err)
     }
 
-    ctx := wirefilter.NewExecutionContext().
-        SetStringField("http.host", "example.com").
-        SetIntField("http.status", 500)
+    ctx := wirefilter.NewExecutionContext(map[string]wirefilter.Value{
+        "http.host":   wirefilter.StringValue("example.com"),
+        "http.status": wirefilter.IntValue(500),
+    })
 
     result, err := filter.Execute(ctx)
     if err != nil {
@@ -111,6 +113,13 @@ http.host == "example.com"
 http.path contains "/api"
 http.user_agent matches "^Mozilla.*"
 http.user_agent ~ "^Mozilla.*"              // ~ is alias for matches
+```
+
+Bytes fields support `contains` as a substring search. The pattern may be a
+string or a bytes value:
+
+```go
+body contains "error"                       // string pattern, matched as bytes
 ```
 
 ### Raw Strings
@@ -199,7 +208,16 @@ Presence checking uses existence-based truthiness:
 ip.src == 192.168.1.1
 ip.src in "192.168.0.0/16"
 ip.src in "2001:db8::/32"
+ip.src in {10.0.0.0/8, 2001:db8:1234::/48}
 ```
+
+Bare IPv4 and IPv6 literals are recognized directly, including double-colon and
+mixed hexadecimal IPv6 forms such as `::1`, `2001:db8::1`, and `fe80::/10`.
+
+A single CIDR on the right of `in` may be written as a quoted string
+(`"192.168.0.0/16"`) or a bare literal (`192.168.0.0/16`). Inside a set
+`{...}`, use bare CIDR literals. Quoted strings in a set are compared as plain
+strings, not networks, so `ip.src in {"10.0.0.0/8"}` never matches an IP.
 
 ### Array Membership
 
@@ -242,6 +260,11 @@ tags[*] == "admin"                          // true (admin matches)
 tags[*] == "root"                           // false (no match)
 tags[*] contains "min"                      // true (admin contains "min")
 ```
+
+A bare `[*]` expression and `any(...)` have the same ANY semantics, so
+`tags[*] == "admin"` and `any(tags[*] == "admin")` are equivalent. `all(...)`
+requires every element to match. Missing and empty arrays return false for all
+three forms.
 
 ### Custom Lists
 
@@ -380,17 +403,7 @@ tags !== "deprecated"
 
 Define the fields that can be used in filter expressions:
 
-#### Method 1: Using method chaining
-
-```go
-schema := wirefilter.NewSchema().
-    AddField("http.host", wirefilter.TypeString).
-    AddField("http.status", wirefilter.TypeInt).
-    AddField("http.secure", wirefilter.TypeBool).
-    AddField("ip.src", wirefilter.TypeIP)
-```
-
-#### Method 2: Using a fields map
+#### Method 1: Using a fields map
 
 ```go
 fields := map[string]wirefilter.Type{
@@ -403,7 +416,7 @@ fields := map[string]wirefilter.Type{
 schema := wirefilter.NewSchema(fields)
 ```
 
-#### Method 3: Using multiple field maps (merged)
+#### Method 2: Using multiple field maps (merged)
 
 ```go
 httpFields := map[string]wirefilter.Type{
@@ -417,6 +430,19 @@ networkFields := map[string]wirefilter.Type{
 }
 
 schema := wirefilter.NewSchema(httpFields, networkFields)
+```
+
+#### Method 3: Using method chaining
+
+Use `AddField` to add fields one at a time, for example when building a schema
+incrementally:
+
+```go
+schema := wirefilter.NewSchema().
+    AddField("http.host", wirefilter.TypeString).
+    AddField("http.status", wirefilter.TypeInt).
+    AddField("http.secure", wirefilter.TypeBool).
+    AddField("ip.src", wirefilter.TypeIP)
 ```
 
 #### Typed Arrays and Maps
@@ -646,23 +672,8 @@ If `schema` is `nil`, field validation is skipped.
 
 ### Execution Context
 
-Set runtime values for evaluation:
-
-```go
-ctx := wirefilter.NewExecutionContext().
-    SetStringField("http.host", "example.com").
-    SetIntField("http.status", 200).
-    SetBoolField("http.secure", true).
-    SetIPField("ip.src", "192.168.1.1").
-    SetBytesField("body", []byte("raw data"))
-```
-
-All setter methods return `*ExecutionContext` for method chaining.
-
-#### Initializing with Field Maps
-
-Like `NewSchema`, `NewExecutionContext` accepts optional field maps for bulk initialization.
-Multiple maps can be provided and will be merged:
+Set runtime values for evaluation. `NewExecutionContext` accepts optional field
+maps for bulk initialization; multiple maps can be provided and will be merged:
 
 ```go
 ctx := wirefilter.NewExecutionContext(
@@ -676,7 +687,21 @@ ctx := wirefilter.NewExecutionContext(
 )
 ```
 
-For a generic value or custom type:
+#### Using setter methods
+
+Setter methods set values one at a time and return `*ExecutionContext` for
+method chaining, for example when building a context incrementally:
+
+```go
+ctx := wirefilter.NewExecutionContext().
+    SetStringField("http.host", "example.com").
+    SetIntField("http.status", 200).
+    SetBoolField("http.secure", true).
+    SetIPField("ip.src", "192.168.1.1").
+    SetBytesField("body", []byte("raw data"))
+```
+
+For a generic value or custom type, use `SetField`:
 
 ```go
 ctx := wirefilter.NewExecutionContext().
@@ -791,6 +816,10 @@ list, ok := ctx.GetList("admin_roles")      // (ArrayValue, bool)
 table, ok := ctx.GetTable("geo")            // (MapValue, bool)
 handler, ok := ctx.GetFunc("get_score")     // (FuncHandler, bool)
 ```
+
+On a snapshot (see [Snapshot Context](#snapshot-context)), `GetField`,
+`GetList`, and `GetTable` return defensive copies of mutable built-in values so
+the snapshot cannot be mutated through a returned value.
 
 #### Retrieving the Go Context
 
@@ -1317,9 +1346,9 @@ exists(http.referer)
 ```
 
 `all()` evaluates the complete condition for each element, including logical
-operators, function calls, and wildcards. Unpack expressions within one condition
-must refer to the same array. Use separate or nested quantifiers for independent
-arrays. Missing and empty arrays return false.
+operators, function calls, wildcards, and nested quantifiers. Unpack expressions
+within one condition must refer to the same array. Use separate or nested
+quantifiers for independent arrays. Missing and empty arrays return false.
 
 ## Advanced Examples
 
@@ -1646,6 +1675,10 @@ for {
 }
 ```
 
+`NextToken` returns a `Token` with `Type == TokenError` when input is invalid.
+`Error(format string, args ...any) error` builds a formatted error annotated
+with the current lexer position, for tools that report their own lexing errors.
+
 ### Parser
 
 Parse tokens into an AST:
@@ -1766,6 +1799,18 @@ filter, _ := wirefilter.Compile(`http.host in $blocked_hosts`, schema)
 
 IP and CIDR elements in lists use hash lookup for exact IP matches
 and fall back to linear scan for CIDR containment checks.
+
+To build an indexed set explicitly, use `NewSetValue(ArrayValue) SetValue` and
+inject it as a field with `SetField`. This is useful for reusing a prepared set
+across contexts or for sets that are not created through `SetList`:
+
+```go
+set := wirefilter.NewSetValue(wirefilter.ArrayValue{
+    wirefilter.StringValue("admin"),
+    wirefilter.StringValue("root"),
+})
+ctx := wirefilter.NewExecutionContext().SetField("privileged", set)
+```
 
 ## Performance
 

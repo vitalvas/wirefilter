@@ -10,8 +10,9 @@ import (
 )
 
 func main() {
-	schema := wirefilter.NewSchema().
-		AddField("http.host", wirefilter.TypeString).
+	schema := wirefilter.NewSchema(map[string]wirefilter.Type{
+		"http.host": wirefilter.TypeString,
+	}).
 		RegisterFunction("slow_lookup", wirefilter.TypeBool, []wirefilter.Type{wirefilter.TypeString})
 
 	filter, err := wirefilter.Compile(
@@ -26,8 +27,9 @@ func main() {
 	goCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	ctx := wirefilter.NewExecutionContext().
-		SetStringField("http.host", "example.com").
+	ctx := wirefilter.NewExecutionContext(map[string]wirefilter.Value{
+		"http.host": wirefilter.StringValue("example.com"),
+	}).
 		WithContext(goCtx).
 		SetFunc("slow_lookup", func(goCtx context.Context, _ []wirefilter.Value) (wirefilter.Value, error) {
 			// Simulate a slow external lookup that respects context cancellation

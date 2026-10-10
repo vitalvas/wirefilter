@@ -10,9 +10,10 @@ import (
 )
 
 func main() {
-	schema := wirefilter.NewSchema().
-		AddField("http.host", wirefilter.TypeString).
-		AddField("user.role", wirefilter.TypeString).
+	schema := wirefilter.NewSchema(map[string]wirefilter.Type{
+		"http.host": wirefilter.TypeString,
+		"user.role": wirefilter.TypeString,
+	}).
 		RegisterFunction("normalize_host", wirefilter.TypeString, []wirefilter.Type{wirefilter.TypeString}).
 		RegisterFunction("has_permission", wirefilter.TypeBool, []wirefilter.Type{wirefilter.TypeString, wirefilter.TypeString})
 
@@ -24,9 +25,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ctx := wirefilter.NewExecutionContext().
-		SetStringField("http.host", "EXAMPLE.COM").
-		SetStringField("user.role", "superadmin").
+	ctx := wirefilter.NewExecutionContext(map[string]wirefilter.Value{
+		"http.host": wirefilter.StringValue("EXAMPLE.COM"),
+		"user.role": wirefilter.StringValue("superadmin"),
+	}).
 		SetFunc("normalize_host", func(_ context.Context, args []wirefilter.Value) (wirefilter.Value, error) {
 			host := string(args[0].(wirefilter.StringValue))
 			return wirefilter.StringValue(strings.ToLower(host)), nil

@@ -8,9 +8,10 @@ import (
 )
 
 func main() {
-	schema := wirefilter.NewSchema().
-		AddField("user.id", wirefilter.TypeString).
-		AddField("ip.src", wirefilter.TypeIP)
+	schema := wirefilter.NewSchema(map[string]wirefilter.Type{
+		"user.id": wirefilter.TypeString,
+		"ip.src":  wirefilter.TypeIP,
+	})
 
 	filter, err := wirefilter.Compile(
 		`$user_tier[user.id] == "premium" and ip.src in $allowed_ips[user.id]`,
@@ -20,8 +21,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ctx := wirefilter.NewExecutionContext().
-		SetStringField("user.id", "user-42").
+	ctx := wirefilter.NewExecutionContext(map[string]wirefilter.Value{
+		"user.id": wirefilter.StringValue("user-42"),
+	}).
 		SetIPField("ip.src", "10.0.1.5").
 		SetTable("user_tier", map[string]string{
 			"user-42": "premium",

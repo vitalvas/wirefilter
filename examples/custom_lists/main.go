@@ -8,9 +8,10 @@ import (
 )
 
 func main() {
-	schema := wirefilter.NewSchema().
-		AddField("http.host", wirefilter.TypeString).
-		AddField("ip.src", wirefilter.TypeIP)
+	schema := wirefilter.NewSchema(map[string]wirefilter.Type{
+		"http.host": wirefilter.TypeString,
+		"ip.src":    wirefilter.TypeIP,
+	})
 
 	filter, err := wirefilter.Compile(
 		`http.host in $blocked_hosts or ip.src in $blocked_ips`,
@@ -20,8 +21,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ctx := wirefilter.NewExecutionContext().
-		SetStringField("http.host", "malware.example.com").
+	ctx := wirefilter.NewExecutionContext(map[string]wirefilter.Value{
+		"http.host": wirefilter.StringValue("malware.example.com"),
+	}).
 		SetIPField("ip.src", "203.0.113.50").
 		SetList("blocked_hosts", []string{
 			"malware.example.com",

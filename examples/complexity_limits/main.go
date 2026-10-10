@@ -7,10 +7,11 @@ import (
 )
 
 func main() {
-	schema := wirefilter.NewSchema().
-		AddField("http.host", wirefilter.TypeString).
-		AddField("http.status", wirefilter.TypeInt).
-		AddField("http.method", wirefilter.TypeString).
+	schema := wirefilter.NewSchema(map[string]wirefilter.Type{
+		"http.host":   wirefilter.TypeString,
+		"http.status": wirefilter.TypeInt,
+		"http.method": wirefilter.TypeString,
+	}).
 		SetMaxDepth(5).
 		SetMaxNodes(10)
 
@@ -22,9 +23,10 @@ func main() {
 	if err != nil {
 		fmt.Printf("Simple filter failed: %v\n", err)
 	} else {
-		ctx := wirefilter.NewExecutionContext().
-			SetStringField("http.host", "example.com").
-			SetIntField("http.status", 500)
+		ctx := wirefilter.NewExecutionContext(map[string]wirefilter.Value{
+			"http.host":   wirefilter.StringValue("example.com"),
+			"http.status": wirefilter.IntValue(500),
+		})
 
 		result, err := simple.Execute(ctx)
 		if err != nil {
@@ -44,9 +46,10 @@ func main() {
 	}
 
 	// This expression exceeds the max node count limit
-	nodeSchema := wirefilter.NewSchema().
-		AddField("http.host", wirefilter.TypeString).
-		AddField("http.status", wirefilter.TypeInt).
+	nodeSchema := wirefilter.NewSchema(map[string]wirefilter.Type{
+		"http.host":   wirefilter.TypeString,
+		"http.status": wirefilter.TypeInt,
+	}).
 		SetMaxNodes(10)
 
 	_, err = wirefilter.Compile(

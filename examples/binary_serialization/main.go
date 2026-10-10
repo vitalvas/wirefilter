@@ -8,9 +8,10 @@ import (
 )
 
 func main() {
-	schema := wirefilter.NewSchema().
-		AddField("http.host", wirefilter.TypeString).
-		AddField("http.status", wirefilter.TypeInt)
+	schema := wirefilter.NewSchema(map[string]wirefilter.Type{
+		"http.host":   wirefilter.TypeString,
+		"http.status": wirefilter.TypeInt,
+	})
 
 	filter, err := wirefilter.Compile(
 		`http.host == "example.com" and http.status >= 400`,
@@ -37,9 +38,10 @@ func main() {
 	}
 
 	// Execute the restored filter
-	ctx := wirefilter.NewExecutionContext().
-		SetStringField("http.host", "example.com").
-		SetIntField("http.status", 500)
+	ctx := wirefilter.NewExecutionContext(map[string]wirefilter.Value{
+		"http.host":   wirefilter.StringValue("example.com"),
+		"http.status": wirefilter.IntValue(500),
+	})
 
 	result, err := restored.Execute(ctx)
 	if err != nil {

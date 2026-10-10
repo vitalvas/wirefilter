@@ -33,8 +33,9 @@ func main() {
 	fmt.Printf("Any critical tag and any score > 50: %v\n", result)
 
 	// Use === to check if ALL elements match (on untyped array)
-	allSchema := wirefilter.NewSchema().
-		AddField("labels", wirefilter.TypeArray)
+	allSchema := wirefilter.NewSchema(map[string]wirefilter.Type{
+		"labels": wirefilter.TypeArray,
+	})
 
 	allFilter, err := wirefilter.Compile(
 		`labels === "active"`,

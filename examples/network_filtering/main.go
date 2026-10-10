@@ -27,10 +27,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ctx := wirefilter.NewExecutionContext().
+	ctx := wirefilter.NewExecutionContext(map[string]wirefilter.Value{
+		"port.dst": wirefilter.IntValue(443),
+		"protocol": wirefilter.StringValue("tcp"),
+	}).
 		SetIPField("ip.src", "10.1.2.3").
-		SetIntField("port.dst", 443).
-		SetStringField("protocol", "tcp").
 		SetArrayField("tags", []string{"production", "v2"})
 
 	result, err := filter.Execute(ctx)

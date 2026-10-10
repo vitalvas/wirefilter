@@ -29,12 +29,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ctx := wirefilter.NewExecutionContext().
-		SetStringField("http.host", "api.example.com").
-		SetStringField("http.method", "GET").
-		SetStringField("http.path", "/api/v2/users").
-		SetIntField("http.status", 200).
-		SetBoolField("http.secure", true)
+	ctx := wirefilter.NewExecutionContext(map[string]wirefilter.Value{
+		"http.host":   wirefilter.StringValue("api.example.com"),
+		"http.method": wirefilter.StringValue("GET"),
+		"http.path":   wirefilter.StringValue("/api/v2/users"),
+		"http.status": wirefilter.IntValue(200),
+		"http.secure": wirefilter.BoolValue(true),
+	})
 
 	result, err := filter.Execute(ctx)
 	if err != nil {
