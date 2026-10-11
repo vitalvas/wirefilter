@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/vitalvas/wirefilter/compare/v1.0.0...v1.1.0) (2026-10-11)
+
+
+### Features
+
+* complete-predicate all(), array membership, snapshot isolation ([0cc22c9](https://github.com/vitalvas/wirefilter/commit/0cc22c982d61e9f4230f8aeaa10d5c72570a37f6))
+* migrate module path to go.vitalvas.com/wirefilter ([33ae45b](https://github.com/vitalvas/wirefilter/commit/33ae45bbeb40a84b355ef768d49c1d9c3079e883))
+
 ## [1.0.0](https://github.com/vitalvas/wirefilter/compare/v0.4.0...v1.0.0) (2026-03-29)
 
 
