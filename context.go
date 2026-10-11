@@ -2,8 +2,9 @@ package wirefilter
 
 import (
 	"context"
+	"maps"
 	"net"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,9 +74,7 @@ func NewExecutionContext(fields ...map[string]Value) *ExecutionContext {
 		tables: make(map[string]MapValue),
 	}
 	for _, fieldMap := range fields {
-		for name, value := range fieldMap {
-			ctx.fields[name] = value
-		}
+		maps.Copy(ctx.fields, fieldMap)
 	}
 	return ctx
 }
@@ -111,9 +110,7 @@ func (ctx *ExecutionContext) Snapshot() *ExecutionContext {
 	var funcs map[string]FuncHandler
 	if ctx.funcs != nil {
 		funcs = make(map[string]FuncHandler, len(ctx.funcs))
-		for k, v := range ctx.funcs {
-			funcs[k] = v
-		}
+		maps.Copy(funcs, ctx.funcs)
 	}
 	nowFunc := ctx.nowFunc
 	goCtx := ctx.goCtx
@@ -858,11 +855,7 @@ func writeCacheKeyValue(sb *strings.Builder, v Value) {
 		}
 		sb.WriteByte(']')
 	case MapValue:
-		keys := make([]string, 0, len(val))
-		for k := range val {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
+		keys := slices.Sorted(maps.Keys(val))
 		sb.WriteByte('{')
 		for i, k := range keys {
 			if i > 0 {

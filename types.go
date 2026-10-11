@@ -1,11 +1,13 @@
 package wirefilter
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
 	"math"
 	"net"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -268,7 +270,7 @@ func (a ArrayValue) containsInterval(iv IntervalValue) bool {
 			spans = append(spans, IntervalValue{start: n, end: n, elemType: iv.elemType})
 		}
 	}
-	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+	slices.SortFunc(spans, func(a, b IntervalValue) int { return cmp.Compare(a.start, b.start) })
 	next := iv.start
 	for _, span := range spans {
 		if span.start > next {
@@ -390,11 +392,7 @@ type MapValue map[string]Value
 func (m MapValue) Type() Type     { return TypeMap }
 func (m MapValue) IsTruthy() bool { return true } // Present maps are truthy (field presence semantics)
 func (m MapValue) String() string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(m))
 	parts := make([]string, 0, len(m))
 	for _, k := range keys {
 		v := m[k]

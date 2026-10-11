@@ -979,10 +979,21 @@ func TestDisableRegex(t *testing.T) {
 
 func TestUDFArgumentTypesForLiterals(t *testing.T) {
 	schema := NewSchema().AddArrayField("ports", TypeInt).AddMapField("names", TypeString).
+		AddField("start", TypeTime).AddField("end", TypeTime).
 		RegisterFunction("echo", TypeString, []Type{TypeString}).
 		RegisterFunction("number", TypeInt, []Type{TypeInt}).
-		RegisterFunction("duration", TypeDuration, []Type{TypeDuration})
-	for _, arg := range []string{`123`, `1.5`, `true`, `1h`, `192.0.2.1`, `192.0.2.0/24`, `2026-01-01T00:00:00Z`, `1+2`, `1 == 1`, `ports[0]`} {
+		RegisterFunction("duration", TypeDuration, []Type{TypeDuration}).
+		RegisterFunction("clock", TypeTime, []Type{TypeTime})
+	mismatch := []string{
+		`123`, `1.5`, `true`, `1h`, `192.0.2.1`, `192.0.2.0/24`,
+		`2026-01-01T00:00:00Z`, `1+2`, `1 == 1`, `ports[0]`,
+		`1.5 + 2`,     // Float + Int resolves to TypeFloat
+		`not true`,    // UnaryExpr(not) resolves to TypeBool
+		`start + 1h`,  // Time + Duration resolves to TypeTime
+		`1h + start`,  // Duration + Time resolves to TypeTime
+		`end - start`, // Time - Time resolves to TypeDuration
+	}
+	for _, arg := range mismatch {
 		_, err := Compile(fmt.Sprintf("echo(%s)", arg), schema)
 		require.ErrorContains(t, err, "expected string")
 	}
@@ -990,7 +1001,21 @@ func TestUDFArgumentTypesForLiterals(t *testing.T) {
 		_, err := Compile(fmt.Sprintf("echo(%s)", arg), schema)
 		require.NoError(t, err)
 	}
-	for _, expr := range []string{`number(ports[0])`, `number(1+2)`, `number(2h/1h)`, `duration(1h+30m)`, `duration(2*1h)`, `duration(1h/2)`} {
+	for _, expr := range []string{
+		`number(ports[0])`, `number(1+2)`, `number(2h/1h)`,
+		`duration(1h+30m)`, `duration(2*1h)`, `duration(1h/2)`,
+		`duration(end - start)`, // Time - Time resolves to TypeDuration
+		`clock(start + 1h)`,     // Time + Duration resolves to TypeTime
+		`clock(start - 1h)`,     // Time - Duration resolves to TypeTime
+		`clock(1h + start)`,     // Duration + Time resolves to TypeTime
+	} {
+		_, err := Compile(expr, schema)
+		require.NoError(t, err)
+	}
+	// Duration*Duration has no arithmetic result rule, so arithmeticResultType
+	// returns false and the argument's type is left unresolved (validation skipped).
+	// Nesting it under another operator leaves that operator's operand unresolved too.
+	for _, expr := range []string{`echo(1h * 2h)`, `echo((1h * 2h) + 1)`} {
 		_, err := Compile(expr, schema)
 		require.NoError(t, err)
 	}

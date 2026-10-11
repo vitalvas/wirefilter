@@ -539,8 +539,6 @@ func (v *validator) resolveValueType(expr Expression) (Type, bool) {
 		if e.Value != nil {
 			return e.Value.Type(), true
 		}
-	case *ArrayExpr:
-		return TypeArray, true
 	case *UnaryExpr:
 		if e.Operator == TokenNot {
 			return TypeBool, true

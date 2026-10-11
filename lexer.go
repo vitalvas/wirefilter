@@ -407,14 +407,7 @@ func (l *Lexer) readIdentifierToken() Token {
 // looksLikeCIDR returns true if the literal might be a CIDR notation (contains /).
 func looksLikeCIDR(s string) bool {
 	// CIDR must contain a / and start with a digit or hex char (for IPv6)
-	hasSlash := false
-	for i := 0; i < len(s); i++ {
-		if s[i] == '/' {
-			hasSlash = true
-			break
-		}
-	}
-	if !hasSlash {
+	if strings.IndexByte(s, '/') < 0 {
 		return false
 	}
 	// Must start with a digit (IPv4) or contain colon (IPv6)
@@ -434,12 +427,7 @@ func looksLikeIP(s string) bool {
 		return true
 	}
 	// Check for IPv6 with :: or hex prefix
-	for i := 0; i < len(s); i++ {
-		if s[i] == ':' {
-			return true
-		}
-	}
-	return false
+	return strings.IndexByte(s, ':') >= 0
 }
 
 // isDurationSuffix checks if a byte is a valid duration unit suffix.

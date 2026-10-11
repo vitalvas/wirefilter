@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"net"
 	"regexp"
 	"sync"
@@ -46,9 +47,7 @@ func (f *Filter) SetMeta(meta RuleMeta) *Filter {
 	m := RuleMeta{ID: meta.ID}
 	if meta.Tags != nil {
 		m.Tags = make(map[string]string, len(meta.Tags))
-		for k, v := range meta.Tags {
-			m.Tags[k] = v
-		}
+		maps.Copy(m.Tags, meta.Tags)
 	}
 	f.mu.Lock()
 	f.meta = m
@@ -65,9 +64,7 @@ func (f *Filter) Meta() RuleMeta {
 	m := RuleMeta{ID: meta.ID}
 	if meta.Tags != nil {
 		m.Tags = make(map[string]string, len(meta.Tags))
-		for k, v := range meta.Tags {
-			m.Tags[k] = v
-		}
+		maps.Copy(m.Tags, meta.Tags)
 	}
 	return m
 }

@@ -879,7 +879,7 @@ func globToRegex(glob string) string {
 	var result []byte
 	result = append(result, '^')
 
-	for i := 0; i < len(glob); i++ {
+	for i := range len(glob) {
 		ch := glob[i]
 		switch ch {
 		case '*':
