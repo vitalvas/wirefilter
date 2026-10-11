@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/vitalvas/wirefilter"
+	"go.vitalvas.com/wirefilter"
 )
 
 func main() {

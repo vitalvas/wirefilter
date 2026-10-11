@@ -54,7 +54,7 @@ inspired by Cloudflare's Wirefilter.
 ## Installation
 
 ```bash
-go get github.com/vitalvas/wirefilter
+go get go.vitalvas.com/wirefilter
 ```
 
 ## Quick Start
@@ -66,7 +66,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/vitalvas/wirefilter"
+    "go.vitalvas.com/wirefilter"
 )
 
 func main() {

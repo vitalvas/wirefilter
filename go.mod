@@ -1,4 +1,4 @@
-module github.com/vitalvas/wirefilter
+module go.vitalvas.com/wirefilter
 
 go 1.27.2
 

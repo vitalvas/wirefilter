@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/vitalvas/wirefilter"
+	"go.vitalvas.com/wirefilter"
 )
 
 func main() {
